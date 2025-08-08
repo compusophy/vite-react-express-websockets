@@ -7,8 +7,8 @@
 
 body {
   font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-  background: #2c3e50;
-  color: #ecf0f1;
+  background: #1f1a14;
+  color: #e5e5e5;
   min-height: 100vh;
   overflow: hidden; /* No scrolling */
   touch-action: manipulation; /* Better mobile touch handling */
@@ -31,7 +31,7 @@ body {
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
-  background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+  background: #1f1a14;
   padding: 0;
   box-sizing: border-box;
 }
@@ -39,7 +39,7 @@ body {
 /* Game canvas - responsive and mobile-first */
 .game-canvas {
   cursor: crosshair;
-  background: #87CEEB;
+  background: transparent;
   
   /* Mobile-first: touch-friendly */
   touch-action: none; /* Prevent scrolling when touching canvas */
@@ -114,24 +114,128 @@ body {
   box-sizing: border-box;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
+  position: relative;
+  overflow: hidden;
 }
 
-.dpad-button:hover {
-  background: #3b5998;
-  border-color: #2980b9;
+/* Prevent sticky :active on mobile */
+.dpad-button:active { transform: none; }
+
+@media (hover: hover) {
+  .dpad-button:hover {
+    background: #3b5998;
+    border-color: #2980b9;
+  }
 }
 
-.dpad-button:active,
 .dpad-button.active {
   background: #2980b9;
   border-color: #1abc9c;
   color: #fff;
-  transform: scale(0.9);
+}
+
+/* Aim indicator: subtle highlight different from active autorun */
+.dpad-button.aim {
+  box-shadow: inset 0 0 0 2px rgba(255, 215, 0, 0.7);
+}
+
+/* When a spell is armed, subtly pulse the armed spell button */
+.dpad-button.spell.aim, .dpad-button.frost.aim, .dpad-button.earth.aim {
+  animation: pulse 1s infinite ease-in-out;
+}
+/* When waiting for direction, softly pulse arrow buttons */
+.dpad-button.await-direction {
+  animation: pulse-dir 1.2s infinite ease-in-out;
+}
+
+@keyframes pulse-dir {
+  0% { box-shadow: inset 0 0 0 0 rgba(255, 255, 255, 0.18); }
+  70% { box-shadow: inset 0 0 0 6px rgba(255, 255, 255, 0); }
+  100% { box-shadow: inset 0 0 0 0 rgba(255, 255, 255, 0); }
+}
+
+/* Remove default browser focus ring; we handle focus styles manually for UI */
+.dpad-button:focus { outline: none; }
+.dpad-button:focus-visible { outline: none; }
+
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 rgba(255, 215, 0, 0.45); }
+  70% { box-shadow: 0 0 0 10px rgba(255, 215, 0, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 215, 0, 0); }
 }
 
 .dpad-button.up {
   grid-column: 2;
   grid-row: 1;
+}
+
+/* Spell button placed at top-left of 3x3 grid */
+.dpad-button.spell {
+  grid-column: 1;
+  grid-row: 1;
+  background: #8e3b2f;
+  border-color: #7a2e24;
+}
+.dpad-button.spell:hover {
+  background: #a24537;
+  border-color: #c24a3a;
+}
+.dpad-button.spell:active,
+.dpad-button.spell.active {
+  background: #e25822;
+  border-color: #ff7f50;
+}
+
+/* Frost button placed at top-right of 3x3 grid */
+.dpad-button.frost {
+  grid-column: 3;
+  grid-row: 1;
+  background: #2b3a67;
+  border-color: #213052;
+}
+.dpad-button.frost:hover {
+  background: #34508a;
+  border-color: #3b6cb7;
+}
+.dpad-button.frost:active,
+.dpad-button.frost.active {
+  background: #3aa9ff;
+  border-color: #88ccff;
+}
+
+/* Earth button placed at bottom-left of 3x3 grid */
+.dpad-button.earth {
+  grid-column: 1;
+  grid-row: 3;
+  background: #3e4a2f;
+  border-color: #2f3a24;
+}
+.dpad-button.earth:hover {
+  background: #4c5a39;
+  border-color: #3d4a2d;
+}
+.dpad-button.earth:active,
+.dpad-button.earth.active {
+  background: #6b8e23;
+  border-color: #8fbc8f;
+}
+
+.spell-icon-wrapper {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cooldown-overlay {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(0, 0, 0, 0.45);
+  pointer-events: none;
 }
 
 .dpad-horizontal {
@@ -147,6 +251,14 @@ body {
   background: transparent;
 }
 
+.dpad-button.center {
+  background: #5a5a5a;
+  border-color: #4a4a4a;
+}
+.dpad-button.center:hover {
+  background: #6d6d6d;
+}
+
 .dpad-button.up {
   grid-column: 2;
   grid-row: 1;
@@ -155,5 +267,20 @@ body {
 .dpad-button.down {
   grid-column: 2;
   grid-row: 3;
+}
+
+/* Air button placed at bottom-right of 3x3 grid */
+.dpad-button.air {
+  grid-column: 3;
+  grid-row: 3;
+  background: #2f3e46;
+  border-color: #223038;
+}
+.dpad-button.air:hover {
+  background: #3a4d56;
+  border-color: #2e4651;
+}
+.dpad-button.air.aim {
+  animation: pulse 1s infinite ease-in-out;
 }
 

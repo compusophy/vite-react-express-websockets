@@ -37,7 +37,8 @@ const SAVE_INTERVAL = 5 * 60 * 1000; // 5 minutes - much more reasonable
 // Simple game state - just players
 let gameState = {
   players: {},
-  nextPlayerId: 1
+  nextPlayerId: 1,
+  blocks: [] // array of { x, y }
 };
 
 // Helper function to generate a random color for players
@@ -70,6 +71,9 @@ function loadGameState() {
         ...gameState,
         ...loadedState
       };
+      if (!Array.isArray(gameState.blocks)) {
+        gameState.blocks = []
+      }
       
       // Mark all loaded players as inactive since their socket connections are dead
       Object.values(gameState.players).forEach(player => {
@@ -176,6 +180,21 @@ io.on('connection', (socket) => {
       console.log(`Player ${player.name} moved to cell (${x}, ${y})`);
     }
   });
+
+  // Handle block placement
+  socket.on('place_block', (data) => {
+    const { x, y } = data || {}
+    if (typeof x !== 'number' || typeof y !== 'number') return
+    // clamp to grid 0..23
+    const cx = Math.max(0, Math.min(23, Math.floor(x)))
+    const cy = Math.max(0, Math.min(23, Math.floor(y)))
+    // prevent duplicates
+    const exists = gameState.blocks.some(b => b.x === cx && b.y === cy)
+    if (exists) return
+    gameState.blocks.push({ x: cx, y: cy })
+    io.emit('block_added', { x: cx, y: cy })
+    console.log(`Block placed at (${cx}, ${cy})`)
+  })
   
   // Handle disconnection
   socket.on('disconnect', () => {
@@ -213,7 +232,8 @@ app.get('/', (req, res) => {
 app.get('/reset', (req, res) => {
   gameState = {
     players: {},
-    nextPlayerId: 1
+    nextPlayerId: 1,
+    blocks: []
   };
   saveGameState();
   

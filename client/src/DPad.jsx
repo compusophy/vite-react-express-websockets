@@ -1,20 +1,40 @@
 import { useState, useCallback, useEffect } from 'react'
-import { ChevronUp, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Flame, Droplet, Square, Mountain, Wind } from 'lucide-react'
 
-const DPad = ({ onMove, canvasSize }) => {
-  const [activeDirection, setActiveDirection] = useState(null)
+const DPad = ({ 
+  onMove, 
+  onSpell, 
+  onFrost, 
+  onDirectionChange, 
+  onArmEarth,
+  onArmAir,
+  onStop,
+  canvasSize, 
+  cooldownFraction = 0, 
+  aimDirection = null,
+  armedSpell = null,
+}) => {
   const [dpadSize, setDpadSize] = useState({ buttonSize: 40, iconSize: 24 })
 
   const handleDirectionPress = useCallback((direction) => {
-    if (activeDirection !== direction) {
-      setActiveDirection(direction)
-      onMove(direction)
-    }
-  }, [activeDirection, onMove])
+    onMove(direction)
+  }, [onMove])
 
-  const handleDirectionRelease = useCallback(() => {
-    setActiveDirection(null)
-  }, [])
+  const clearFocus = (e) => {
+    if (e && e.currentTarget) e.currentTarget.blur()
+  }
+
+  const handleSpellPress = useCallback(() => {
+    if (onSpell) onSpell()
+  }, [onSpell])
+
+  const handleFrostPress = useCallback(() => {
+    if (onFrost) onFrost()
+  }, [onFrost])
+
+  const handleEarthPress = useCallback(() => {
+    if (onArmEarth) onArmEarth()
+  }, [onArmEarth])
 
   // Calculate D-pad size using golden ratio of canvas width
   useEffect(() => {
@@ -42,8 +62,7 @@ const DPad = ({ onMove, canvasSize }) => {
 
   const getButtonClass = (direction) => {
     const baseClass = 'dpad-button'
-    const activeClass = activeDirection === direction ? ' active' : ''
-    return `${baseClass} ${direction}${activeClass}`
+    return `${baseClass} ${direction}`
   }
 
   return (
@@ -55,52 +74,116 @@ const DPad = ({ onMove, canvasSize }) => {
           gridTemplateRows: `${dpadSize.buttonSize}px ${dpadSize.buttonSize}px ${dpadSize.buttonSize}px`
         }}
       >
-        {/* Up button */}
+        { /* When a spell is armed, subtly pulse the arrows to indicate next step */ }
+        { /* We'll add the 'await-direction' class when armedSpell is set */ }
+        { /* Compute once for readability */ }
+        { /* Note: We keep aim glow only when a spell is armed */ }
+        {/* Spell button (top-left) */}
         <button
-          className={getButtonClass('up')}
+          className={getButtonClass('spell') + (armedSpell === 'fire' ? ' aim' : '')}
           style={{
             width: `${dpadSize.buttonSize}px`,
             height: `${dpadSize.buttonSize}px`
           }}
-          onMouseDown={() => handleDirectionPress('up')}
-          onMouseUp={handleDirectionRelease}
-          onMouseLeave={handleDirectionRelease}
+          onPointerDown={handleSpellPress}
+          onPointerUp={(e) => e.currentTarget.blur()}
+          aria-label="Cast Spell"
+        >
+          <div className="spell-icon-wrapper">
+            <Flame size={dpadSize.iconSize} strokeWidth={3} />
+            {cooldownFraction > 0 && (
+              <div 
+                className="cooldown-overlay"
+                style={{ height: `${cooldownFraction * 100}%` }}
+                aria-hidden="true"
+              />
+            )}
+          </div>
+        </button>
+
+        {/* Up button */}
+        <button
+          className={
+            getButtonClass('up') +
+            (armedSpell ? ' await-direction' : '') +
+            (armedSpell && aimDirection === 'up' ? ' aim' : '')
+          }
+          style={{
+            width: `${dpadSize.buttonSize}px`,
+            height: `${dpadSize.buttonSize}px`
+          }}
+          onPointerDown={() => handleDirectionPress('up')}
+          onPointerUp={clearFocus}
         >
           <ChevronUp size={dpadSize.iconSize} strokeWidth={3} />
+        </button>
+
+        {/* Frost button (top-right) */}
+        <button
+          className={getButtonClass('frost') + (armedSpell === 'water' ? ' aim' : '')}
+          style={{
+            width: `${dpadSize.buttonSize}px`,
+            height: `${dpadSize.buttonSize}px`
+          }}
+          onPointerDown={handleFrostPress}
+          onPointerUp={(e) => e.currentTarget.blur()}
+          aria-label="Cast Frostbolt"
+        >
+          <div className="spell-icon-wrapper">
+            <Droplet size={dpadSize.iconSize} strokeWidth={3} />
+            {cooldownFraction > 0 && (
+              <div 
+                className="cooldown-overlay"
+                style={{ height: `${cooldownFraction * 100}%` }}
+                aria-hidden="true"
+              />
+            )}
+          </div>
         </button>
         
         {/* Left and Right buttons */}
         <div className="dpad-horizontal">
           <button
-            className={getButtonClass('left')}
+            className={
+              getButtonClass('left') +
+              (armedSpell ? ' await-direction' : '') +
+              (armedSpell && aimDirection === 'left' ? ' aim' : '')
+            }
             style={{
               width: `${dpadSize.buttonSize}px`,
               height: `${dpadSize.buttonSize}px`
             }}
-            onMouseDown={() => handleDirectionPress('left')}
-            onMouseUp={handleDirectionRelease}
-            onMouseLeave={handleDirectionRelease}
+            onPointerDown={() => handleDirectionPress('left')}
+            onPointerUp={clearFocus}
           >
             <ChevronLeft size={dpadSize.iconSize} strokeWidth={3} />
           </button>
           
-          <div 
-            className="dpad-center-empty"
+          <button
+            className={getButtonClass('center')}
             style={{
               width: `${dpadSize.buttonSize}px`,
               height: `${dpadSize.buttonSize}px`
             }}
-          ></div>
+            onPointerDown={() => onStop && onStop()}
+            onPointerUp={clearFocus}
+            aria-label="Stop"
+          >
+            <Square size={dpadSize.iconSize} strokeWidth={3} />
+          </button>
           
           <button
-            className={getButtonClass('right')}
+            className={
+              getButtonClass('right') +
+              (armedSpell ? ' await-direction' : '') +
+              (armedSpell && aimDirection === 'right' ? ' aim' : '')
+            }
             style={{
               width: `${dpadSize.buttonSize}px`,
               height: `${dpadSize.buttonSize}px`
             }}
-            onMouseDown={() => handleDirectionPress('right')}
-            onMouseUp={handleDirectionRelease}
-            onMouseLeave={handleDirectionRelease}
+            onPointerDown={() => handleDirectionPress('right')}
+            onPointerUp={clearFocus}
           >
             <ChevronRight size={dpadSize.iconSize} strokeWidth={3} />
           </button>
@@ -108,16 +191,65 @@ const DPad = ({ onMove, canvasSize }) => {
         
         {/* Down button */}
         <button
-          className={getButtonClass('down')}
+          className={
+            getButtonClass('down') +
+            (armedSpell ? ' await-direction' : '') +
+            (armedSpell && aimDirection === 'down' ? ' aim' : '')
+          }
           style={{
             width: `${dpadSize.buttonSize}px`,
             height: `${dpadSize.buttonSize}px`
           }}
-          onMouseDown={() => handleDirectionPress('down')}
-          onMouseUp={handleDirectionRelease}
-          onMouseLeave={handleDirectionRelease}
+          onPointerDown={() => handleDirectionPress('down')}
+          onPointerUp={clearFocus}
         >
           <ChevronDown size={dpadSize.iconSize} strokeWidth={3} />
+        </button>
+
+        {/* Earth button (bottom-left) */}
+        <button
+          className={getButtonClass('earth') + (armedSpell === 'earth' ? ' aim' : '')}
+          style={{
+            width: `${dpadSize.buttonSize}px`,
+            height: `${dpadSize.buttonSize}px`
+          }}
+          onPointerDown={handleEarthPress}
+          onPointerUp={(e) => e.currentTarget.blur()}
+          aria-label="Place Earth Block"
+        >
+          <div className="spell-icon-wrapper">
+            <Mountain size={dpadSize.iconSize} strokeWidth={3} />
+            {cooldownFraction > 0 && (
+              <div 
+                className="cooldown-overlay"
+                style={{ height: `${cooldownFraction * 100}%` }}
+                aria-hidden="true"
+              />
+            )}
+          </div>
+        </button>
+
+        {/* Air button (bottom-right) */}
+        <button
+          className={getButtonClass('air') + (armedSpell === 'air' ? ' aim' : '')}
+          style={{
+            width: `${dpadSize.buttonSize}px`,
+            height: `${dpadSize.buttonSize}px`
+          }}
+          onPointerDown={() => onArmAir && onArmAir()}
+          onPointerUp={(e) => e.currentTarget.blur()}
+          aria-label="Cast Air"
+        >
+          <div className="spell-icon-wrapper">
+            <Wind size={dpadSize.iconSize} strokeWidth={3} />
+            {cooldownFraction > 0 && (
+              <div 
+                className="cooldown-overlay"
+                style={{ height: `${cooldownFraction * 100}%` }}
+                aria-hidden="true"
+              />
+            )}
+          </div>
         </button>
       </div>
     </div>
