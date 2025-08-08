@@ -1,0 +1,21 @@
+{
+  "name": "rts-game-server",
+  "version": "1.0.0",
+  "description": "Server for persistent RTS game MVP",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "keywords": ["rts", "game", "socket.io", "express", "multiplayer"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "socket.io": "^4.7.4"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}

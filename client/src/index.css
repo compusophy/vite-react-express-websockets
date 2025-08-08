@@ -1,0 +1,159 @@
+/* Reset and base styles */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background: #2c3e50;
+  color: #ecf0f1;
+  min-height: 100vh;
+  overflow: hidden; /* No scrolling */
+  touch-action: manipulation; /* Better mobile touch handling */
+  margin: 0;
+  padding: 0;
+}
+
+#root {
+  width: 100vw;
+  height: 100vh;
+  margin: 0;
+  padding: 0;
+}
+
+/* App layout - canvas flush with top, D-pad below */
+.app {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+  padding: 0;
+  box-sizing: border-box;
+}
+
+/* Game canvas - responsive and mobile-first */
+.game-canvas {
+  cursor: crosshair;
+  background: #87CEEB;
+  
+  /* Mobile-first: touch-friendly */
+  touch-action: none; /* Prevent scrolling when touching canvas */
+  user-select: none; /* Prevent text selection */
+  display: block; /* Remove any inline spacing */
+}
+
+/* Mobile optimizations */
+@media (max-width: 768px) {
+  .game-canvas {
+    /* No constraints on mobile - edge to edge */
+    max-width: none;
+    max-height: none;
+    width: 100vw !important;
+    margin: 0;
+    border: none;
+  }
+  
+  .app {
+    padding: 0;
+    margin: 0;
+  }
+}
+
+/* Desktop optimizations */
+@media (min-width: 769px) {
+  .game-canvas {
+    cursor: crosshair;
+    max-width: 95vw;
+    max-height: 95vh;
+  }
+}
+
+/* Landscape phone orientation */
+@media (max-width: 768px) and (orientation: landscape) {
+  .game-canvas {
+    width: 100vh !important; /* Use full height as width in landscape */
+    height: 100vh !important;
+    max-width: none;
+    max-height: none;
+  }
+}
+
+/* D-Pad Styling - Precise square buttons, centered */
+.dpad-container {
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  width: 100%;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+}
+
+.dpad {
+  display: grid;
+  gap: 0;
+}
+
+.dpad-button {
+  background: #34495e;
+  border: 1px solid #2c3e50;
+  color: #ecf0f1;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.1s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.dpad-button:hover {
+  background: #3b5998;
+  border-color: #2980b9;
+}
+
+.dpad-button:active,
+.dpad-button.active {
+  background: #2980b9;
+  border-color: #1abc9c;
+  color: #fff;
+  transform: scale(0.9);
+}
+
+.dpad-button.up {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.dpad-horizontal {
+  grid-column: 1 / 4;
+  grid-row: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0;
+}
+
+.dpad-center-empty {
+  background: transparent;
+}
+
+.dpad-button.up {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.dpad-button.down {
+  grid-column: 2;
+  grid-row: 3;
+}
+
