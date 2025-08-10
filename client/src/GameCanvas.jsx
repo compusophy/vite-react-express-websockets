@@ -1,12 +1,12 @@
 import { useRef, useEffect, useState, useMemo } from 'react'
 
-const GameCanvas = ({ gameState, currentPlayerId, onCanvasClick, onCanvasSizeChange, projectiles = [] }) => {
+const GameCanvas = ({ gameState, currentPlayerId, onCanvasClick, onCanvasSizeChange, projectiles = [], mapSeed = 1337 }) => {
   const canvasRef = useRef(null)
   const [canvasSize, setCanvasSize] = useState({ width: 600, height: 600 })
   
   const GRID_COLS = 24  // 0-23
   const GRID_ROWS = 24  // 0-23
-  const MAP_SEED = 1337
+  const MAP_SEED = mapSeed
   const RESOURCE_CLUSTER = 3 // how many cells per resource patch
 
   // Deterministic player class assignment (wizard | knight | archer)
@@ -88,10 +88,59 @@ const GameCanvas = ({ gameState, currentPlayerId, onCanvasClick, onCanvasSizeCha
     ctx.fillStyle = '#ffffff'
     ctx.fill()
   }
+
+  const drawStickFigure = (ctx, cx, cy, size, color) => {
+    const headRadius = Math.max(2, size * 0.18)
+    const lineWidth = Math.max(1.2, size * 0.12)
+    const torsoLen = size * 0.38
+    const armLen = size * 0.28
+    const legLen = size * 0.36
+    const torsoTopY = cy - headRadius - size * 0.04
+    const torsoBottomY = torsoTopY + torsoLen
+    ctx.save()
+    ctx.strokeStyle = color
+    ctx.lineCap = 'round'
+    ctx.lineJoin = 'round'
+    ctx.lineWidth = lineWidth
+    // Head
+    ctx.beginPath()
+    ctx.arc(cx, cy - headRadius - torsoLen * 0.1, headRadius, 0, 2 * Math.PI)
+    ctx.stroke()
+    // Torso
+    ctx.beginPath()
+    ctx.moveTo(cx, torsoTopY)
+    ctx.lineTo(cx, torsoBottomY)
+    ctx.stroke()
+    // Arms
+    ctx.beginPath()
+    ctx.moveTo(cx - armLen, torsoTopY + torsoLen * 0.35)
+    ctx.lineTo(cx + armLen, torsoTopY + torsoLen * 0.35)
+    ctx.stroke()
+    // Legs
+    ctx.beginPath()
+    ctx.moveTo(cx, torsoBottomY)
+    ctx.lineTo(cx - armLen * 0.6, torsoBottomY + legLen)
+    ctx.moveTo(cx, torsoBottomY)
+    ctx.lineTo(cx + armLen * 0.6, torsoBottomY + legLen)
+    ctx.stroke()
+    ctx.restore()
+  }
   
   // Icon cache for lucide-like SVGs
   const iconCacheRef = useRef(new Map())
   const [iconVersion, setIconVersion] = useState(0)
+  const getUserIconImage = (fillColor = '#ffffff') => {
+    const key = `user-${fillColor}-filled`
+    const cached = iconCacheRef.current.get(key)
+    if (cached) return cached
+    const svg = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\">\n  <circle cx=\"12\" cy=\"8\" r=\"4\" fill=\"${fillColor}\"/>\n  <rect x=\"6\" y=\"12\" width=\"12\" height=\"8\" rx=\"6\" fill=\"${fillColor}\"/>\n</svg>`
+    const uri = 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg)
+    const img = new Image()
+    img.onload = () => setIconVersion(v => v + 1)
+    img.src = uri
+    iconCacheRef.current.set(key, img)
+    return img
+  }
   const getTreeIconImage = (strokeColor = '#ffffff') => {
     const key = `tree-${strokeColor}`
     const cached = iconCacheRef.current.get(key)
@@ -133,6 +182,37 @@ const GameCanvas = ({ gameState, currentPlayerId, onCanvasClick, onCanvasSizeCha
     const shadow = '#a58833'
     const highlight = '#f6e08a'
     const svg = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\">\n  <path d=\"M6 14 L9 10 H15 L18 14 Z\" fill=\"${top}\"/>\n  <rect x=\"5\" y=\"14\" width=\"14\" height=\"6\" rx=\"1.5\" fill=\"${base}\"/>\n  <path d=\"M5 14 H19\" stroke=\"${shadow}\" stroke-width=\"1\" opacity=\"0.6\"/>\n  <path d=\"M6 14 L9 10 H15 L18 14\" stroke=\"${shadow}\" stroke-width=\"1\" opacity=\"0.6\"/>\n  <path d=\"M7 16 H17\" stroke=\"${highlight}\" stroke-width=\"1\" opacity=\"0.35\"/>\n</svg>`
+    const uri = 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg)
+    const img = new Image()
+    img.onload = () => setIconVersion(v => v + 1)
+    img.src = uri
+    iconCacheRef.current.set(key, img)
+    return img
+  }
+
+  const getDiamondIconImage = (strokeColor = '#7dd3fc') => {
+    const key = `diamond-${strokeColor}-filled`
+    const cached = iconCacheRef.current.get(key)
+    if (cached) return cached
+    // Simple diamond (rhombus) with subtle facets
+    const base = strokeColor
+    const highlight = '#c3f0ff'
+    const shadow = '#5bb8d6'
+    const svg = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\">\n  <path d=\"M12 3 L20 12 L12 21 L4 12 Z\" fill=\"${base}\"/>\n  <path d=\"M12 3 L16 12 L12 21 L8 12 Z\" fill=\"${highlight}\" opacity=\"0.5\"/>\n  <path d=\"M12 3 L20 12 L16 12 Z\" fill=\"${shadow}\" opacity=\"0.4\"/>\n</svg>`
+    const uri = 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg)
+    const img = new Image()
+    img.onload = () => setIconVersion(v => v + 1)
+    img.src = uri
+    iconCacheRef.current.set(key, img)
+    return img
+  }
+
+  const getVillagerIconImage = (fillColor = '#e5e5e5') => {
+    const key = `villager-${fillColor}-v1`
+    const cached = iconCacheRef.current.get(key)
+    if (cached) return cached
+    // Simple humanoid silhouette: head, torso/arms block, and two legs
+    const svg = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\">\n  <circle cx=\"12\" cy=\"6.5\" r=\"3.2\" fill=\"${fillColor}\"/>\n  <rect x=\"6\" y=\"10\" width=\"12\" height=\"6.5\" rx=\"2.2\" fill=\"${fillColor}\"/>\n  <rect x=\"8\" y=\"16.5\" width=\"3.2\" height=\"5\" rx=\"1.2\" fill=\"${fillColor}\"/>\n  <rect x=\"12.8\" y=\"16.5\" width=\"3.2\" height=\"5\" rx=\"1.2\" fill=\"${fillColor}\"/>\n</svg>`
     const uri = 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg)
     const img = new Image()
     img.onload = () => setIconVersion(v => v + 1)
@@ -193,6 +273,8 @@ const GameCanvas = ({ gameState, currentPlayerId, onCanvasClick, onCanvasSizeCha
     const stoneCount = Math.round(PHI * rem2)
     const rem3 = rem2 - stoneCount
     const goldCount = Math.round(PHI * rem3)
+    const rem4 = rem3 - goldCount
+    const diamondCount = Math.round(PHI * rem4)
     // Assign types
     const types = new Array(total).fill('open')
     let idx = 0
@@ -203,6 +285,8 @@ const GameCanvas = ({ gameState, currentPlayerId, onCanvasClick, onCanvasSizeCha
     for (let k = 0; k < stoneCount && idx + k < total; k++) types[indices[idx + k]] = 'stone'
     idx += stoneCount
     for (let k = 0; k < goldCount && idx + k < total; k++) types[indices[idx + k]] = 'gold'
+    idx += goldCount
+    for (let k = 0; k < diamondCount && idx + k < total; k++) types[indices[idx + k]] = 'diamond'
     return types
   }, [GRID_COLS, GRID_ROWS, MAP_SEED])
 
@@ -280,6 +364,7 @@ const GameCanvas = ({ gameState, currentPlayerId, onCanvasClick, onCanvasSizeCha
     const woodCells = []
     const stoneCells = []
     const goldCells = []
+    const diamondCells = []
     for (let cy = 0; cy < GRID_ROWS; cy++) {
       for (let cx = 0; cx < GRID_COLS; cx++) {
         const idx = cy * GRID_COLS + cx
@@ -287,6 +372,7 @@ const GameCanvas = ({ gameState, currentPlayerId, onCanvasClick, onCanvasSizeCha
         if (type === 'wood') woodCells.push({ cx, cy })
         else if (type === 'stone') stoneCells.push({ cx, cy })
         else if (type === 'gold') goldCells.push({ cx, cy })
+        else if (type === 'diamond') diamondCells.push({ cx, cy })
       }
     }
 
@@ -322,12 +408,12 @@ const GameCanvas = ({ gameState, currentPlayerId, onCanvasClick, onCanvasSizeCha
       ctx.fillRect(pixelX - size/2, pixelY + size*0.15, size, size * 0.35)
     })
 
-    // Draw resource icons (no thinning), slightly smaller to reduce clutter
-    const drawIconSet = (cells, getIcon, color, sizeFactor = 0.48) => {
+    // Draw resource icons (no thinning)
+    const drawIconSet = (cells, getIcon, color, sizeFactor = 0.7) => {
       cells.forEach(({ cx, cy }) => {
         const centerX = cx * GRID_SIZE + (GRID_SIZE / 2)
         const centerY = cy * GRID_SIZE + (GRID_SIZE / 2)
-        const iconSize = Math.max(8, Math.min(16, GRID_SIZE * sizeFactor))
+        const iconSize = Math.max(12, Math.min(24, GRID_SIZE * sizeFactor))
         const iconImg = getIcon(color)
         if (iconImg && iconImg.complete) {
           ctx.drawImage(iconImg, centerX - iconSize * 0.5, centerY - iconSize * 0.5, iconSize, iconSize)
@@ -335,9 +421,10 @@ const GameCanvas = ({ gameState, currentPlayerId, onCanvasClick, onCanvasSizeCha
       })
     }
 
-    drawIconSet(woodCells, getTreeIconImage, '#7aa267', 0.5)
-    drawIconSet(stoneCells, getStoneIconImage, '#9aa3ad', 0.5)
-    drawIconSet(goldCells, getGoldIconImage, '#d2b055', 0.5)
+    drawIconSet(woodCells, getTreeIconImage, '#7aa267', 0.7)
+    drawIconSet(stoneCells, getStoneIconImage, '#9aa3ad', 0.7)
+    drawIconSet(goldCells, getGoldIconImage, '#d2b055', 0.7)
+    drawIconSet(diamondCells, getDiamondIconImage, '#7dd3fc', 0.7)
 
     // Draw players
     Object.values(gameState.players)
@@ -351,29 +438,25 @@ const GameCanvas = ({ gameState, currentPlayerId, onCanvasClick, onCanvasSizeCha
         const maxRadius = (GRID_SIZE / 2) * 0.7 // 70% of half cell size
         const circleRadius = Math.max(4, Math.min(12, maxRadius)) // Between 4-12px
         
-        if (player.id === currentPlayerId) {
-          // Class badge with smaller size and thinner outline
-          const cls = getPlayerClass(player.id)
-          const badgeSize = Math.max(12, Math.min(20, GRID_SIZE * 0.65))
-          const bx = pixelX - badgeSize / 2
-          const by = pixelY - badgeSize / 2
-          drawRoundedRect(ctx, bx, by, badgeSize, badgeSize, Math.max(3, badgeSize * 0.2))
-          ctx.fillStyle = player.color || '#58a'
-          ctx.fill()
-          const iconSize = badgeSize * 0.82
-          if (cls === 'wizard') drawWizardIcon(ctx, pixelX, pixelY, iconSize)
-          else if (cls === 'knight') drawKnightIcon(ctx, pixelX, pixelY, iconSize)
-          else drawArcherIcon(ctx, pixelX, pixelY, iconSize)
-          ctx.strokeStyle = 'rgba(255,255,255,0.65)'
-          ctx.lineWidth = 0.75
-          drawRoundedRect(ctx, bx, by, badgeSize, badgeSize, Math.max(3, badgeSize * 0.2))
-          ctx.stroke()
+        // All players: Lucide user icon (pure canvas)
+        const targetSize = Math.max(14, Math.min(26, GRID_SIZE * 0.75))
+        const villager = getVillagerIconImage(player.color || '#e5e5e5')
+        if (villager && villager.complete) {
+          ctx.drawImage(villager, pixelX - targetSize / 2, pixelY - targetSize / 2, targetSize, targetSize)
         } else {
-          // Other players: minimal filled disk
-          ctx.fillStyle = player.color
+          // Fallback: filled user silhouette
+          const iconImg = getUserIconImage(player.color || '#ffffff')
+          if (iconImg && iconImg.complete) {
+            ctx.drawImage(iconImg, pixelX - targetSize / 2, pixelY - targetSize / 2, targetSize, targetSize)
+          }
+        }
+        if (player.id === currentPlayerId) {
+          // Ownership ring only for current player
+          ctx.strokeStyle = 'rgba(229,229,229,0.8)'
+          ctx.lineWidth = 0.75
           ctx.beginPath()
-          ctx.arc(pixelX, pixelY, circleRadius, 0, 2 * Math.PI)
-          ctx.fill()
+          ctx.arc(pixelX, pixelY, Math.max(8, targetSize * 0.55), 0, 2 * Math.PI)
+          ctx.stroke()
         }
       })
 

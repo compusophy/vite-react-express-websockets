@@ -13,6 +13,7 @@ const DPad = ({
   cooldownFraction = 0, 
   aimDirection = null,
   armedSpell = null,
+  allowedDirections = null,
 }) => {
   const [dpadSize, setDpadSize] = useState({ buttonSize: 40, iconSize: 24 })
 
@@ -62,7 +63,10 @@ const DPad = ({
 
   const getButtonClass = (direction) => {
     const baseClass = 'dpad-button'
-    return `${baseClass} ${direction}`
+    const isArrow = direction === 'up' || direction === 'down' || direction === 'left' || direction === 'right'
+    const allowed = isArrow && allowedDirections ? !!allowedDirections[direction] : true
+    const disabledClass = allowed ? '' : ' disabled'
+    return `${baseClass} ${direction}${disabledClass}`
   }
 
   return (
@@ -105,7 +109,7 @@ const DPad = ({
         <button
           className={
             getButtonClass('up') +
-            (armedSpell ? ' await-direction' : '') +
+            (armedSpell && (!allowedDirections || allowedDirections.up) ? ' await-direction' : '') +
             (armedSpell && aimDirection === 'up' ? ' aim' : '')
           }
           style={{
@@ -145,9 +149,9 @@ const DPad = ({
         <div className="dpad-horizontal">
           <button
             className={
-              getButtonClass('left') +
-              (armedSpell ? ' await-direction' : '') +
-              (armedSpell && aimDirection === 'left' ? ' aim' : '')
+            getButtonClass('left') +
+            (armedSpell && (!allowedDirections || allowedDirections.left) ? ' await-direction' : '') +
+            (armedSpell && aimDirection === 'left' ? ' aim' : '')
             }
             style={{
               width: `${dpadSize.buttonSize}px`,
@@ -174,9 +178,9 @@ const DPad = ({
           
           <button
             className={
-              getButtonClass('right') +
-              (armedSpell ? ' await-direction' : '') +
-              (armedSpell && aimDirection === 'right' ? ' aim' : '')
+            getButtonClass('right') +
+            (armedSpell && (!allowedDirections || allowedDirections.right) ? ' await-direction' : '') +
+            (armedSpell && aimDirection === 'right' ? ' aim' : '')
             }
             style={{
               width: `${dpadSize.buttonSize}px`,
@@ -193,7 +197,7 @@ const DPad = ({
         <button
           className={
             getButtonClass('down') +
-            (armedSpell ? ' await-direction' : '') +
+            (armedSpell && (!allowedDirections || allowedDirections.down) ? ' await-direction' : '') +
             (armedSpell && aimDirection === 'down' ? ' aim' : '')
           }
           style={{

@@ -1,13 +1,14 @@
 import { useState, useEffect, useMemo } from 'react'
 import { io } from 'socket.io-client'
 import GameCanvas from './GameCanvas'
+import AdminPanel from './AdminPanel'
 import DPad from './DPad'
 
 function App() {
   const COOLDOWN_MS = 1000
   const GRID_COLS = 24
   const GRID_ROWS = 24
-  const MAP_SEED = 1337
+  const [mapSeed, setMapSeed] = useState(() => Math.floor(Math.random() * 1e9))
   const [socket, setSocket] = useState(null)
   const [gameState, setGameState] = useState({
     players: {},
@@ -37,7 +38,7 @@ function App() {
 
   const resourceMap = useMemo(() => {
     const total = GRID_COLS * GRID_ROWS
-    const rng = makeRng(MAP_SEED)
+    const rng = makeRng(mapSeed)
     const indices = Array.from({ length: total }, (_, i) => i)
     for (let i = total - 1; i > 0; i--) {
       const j = Math.floor(rng() * (i + 1))
@@ -52,6 +53,8 @@ function App() {
     const stoneCount = Math.round(PHI * rem2)
     const rem3 = rem2 - stoneCount
     const goldCount = Math.round(PHI * rem3)
+    const rem4 = rem3 - goldCount
+    const diamondCount = Math.round(PHI * rem4)
     const types = new Array(total).fill('open')
     let idx = 0
     idx += openCount
@@ -60,8 +63,61 @@ function App() {
     for (let k = 0; k < stoneCount && idx + k < total; k++) types[indices[idx + k]] = 'stone'
     idx += stoneCount
     for (let k = 0; k < goldCount && idx + k < total; k++) types[indices[idx + k]] = 'gold'
+    idx += goldCount
+    for (let k = 0; k < diamondCount && idx + k < total; k++) types[indices[idx + k]] = 'diamond'
     return types
-  }, [])
+  }, [mapSeed])
+
+  // Compute viable directions for placing an earth block (client-side mirror of server rules)
+  const allowedEarthDirections = useMemo(() => {
+    if (armedSpell !== 'earth' || !currentPlayerId || !gameState.players[currentPlayerId]) return null
+    const me = gameState.players[currentPlayerId]
+    const isCellViable = (tx, ty) => {
+      if (tx < 0 || tx > 23 || ty < 0 || ty > 23) return false
+      // cannot interact on active player
+      const occupiedByPlayer = Object.values(gameState.players || {}).some(p => p.isActive && p.x === tx && p.y === ty)
+      if (occupiedByPlayer) return false
+      // if a block exists, allow (toggle removal)
+      const hasBlock = (gameState.blocks || []).some(b => b.x === tx && b.y === ty)
+      if (hasBlock) return true
+      // otherwise, only allow placing on open resource tiles
+      const idx = ty * GRID_COLS + tx
+      const type = resourceMap[idx]
+      if (type && type !== 'open') return false
+      return true
+    }
+    return {
+      up: isCellViable(me.x, Math.max(0, me.y - 1)),
+      down: isCellViable(me.x, Math.min(23, me.y + 1)),
+      left: isCellViable(Math.max(0, me.x - 1), me.y),
+      right: isCellViable(Math.min(23, me.x + 1), me.y)
+    }
+  }, [armedSpell, currentPlayerId, gameState.players, gameState.blocks, resourceMap])
+
+  // Compute viable directions for movement (cannot step into players, earth blocks, or resources)
+  const allowedMoveDirections = useMemo(() => {
+    if (!currentPlayerId || !gameState.players[currentPlayerId]) return null
+    const me = gameState.players[currentPlayerId]
+    const isCellWalkable = (tx, ty) => {
+      if (tx < 0 || tx > 23 || ty < 0 || ty > 23) return false
+      // cannot move into server blocks
+      if ((gameState.blocks || []).some(b => b.x === tx && b.y === ty)) return false
+      // cannot move into non-open resource
+      const idx = ty * GRID_COLS + tx
+      const type = resourceMap[idx]
+      if (type && type !== 'open') return false
+      // cannot move into tile with another active player
+      const occupied = Object.values(gameState.players || {}).some(p => p.isActive && p.id !== currentPlayerId && p.x === tx && p.y === ty)
+      if (occupied) return false
+      return true
+    }
+    return {
+      up: isCellWalkable(me.x, Math.max(0, me.y - 1)),
+      down: isCellWalkable(me.x, Math.min(23, me.y + 1)),
+      left: isCellWalkable(Math.max(0, me.x - 1), me.y),
+      right: isCellWalkable(Math.min(23, me.x + 1), me.y)
+    }
+  }, [currentPlayerId, gameState.players, gameState.blocks, resourceMap])
 
   useEffect(() => {
     const serverUrl = import.meta.env.PROD 
@@ -81,6 +137,9 @@ function App() {
     newSocket.on('welcome', (data) => {
       setGameState(data.gameState)
       setCurrentPlayerId(data.playerId)
+      if (Number.isInteger(data.gameState?.mapSeed)) {
+        setMapSeed(data.gameState.mapSeed)
+      }
     })
 
     newSocket.on('player_joined', (data) => {
@@ -130,6 +189,18 @@ function App() {
       })
     })
 
+    // Authoritative position (used for re-sync on rejection or confirmation)
+    newSocket.on('player_position', (data) => {
+      setGameState(prevState => {
+        const newPlayers = { ...prevState.players }
+        if (newPlayers[data.playerId]) {
+          newPlayers[data.playerId].x = data.x
+          newPlayers[data.playerId].y = data.y
+        }
+        return { ...prevState, players: newPlayers }
+      })
+    })
+
     newSocket.on('block_added', (data) => {
       const { x, y } = data
       setGameState(prev => {
@@ -137,6 +208,22 @@ function App() {
         if (exists) return prev
         return { ...prev, blocks: [...(prev.blocks || []), { x, y }] }
       })
+    })
+
+    newSocket.on('block_removed', (data) => {
+      const { x, y } = data
+      setGameState(prev => ({
+        ...prev,
+        blocks: (prev.blocks || []).filter(b => !(b.x === x && b.y === y))
+      }))
+    })
+
+    newSocket.on('blocks_reset', () => {
+      setGameState(prev => ({ ...prev, blocks: [] }))
+    })
+
+    newSocket.on('map_seed', ({ seed }) => {
+      if (Number.isInteger(seed)) setMapSeed(seed)
     })
 
     return () => {
@@ -168,6 +255,9 @@ function App() {
     // If a spell is armed, consume this direction to cast; otherwise move one tile
     setAimDirection(direction)
     if (armedSpell) {
+      if (armedSpell === 'earth' && allowedEarthDirections && allowedEarthDirections[direction] === false) {
+        return
+      }
       castArmedSpellInDirection(armedSpell, direction)
       return
     }
@@ -175,7 +265,7 @@ function App() {
   }
 
   // Attempt a single tile move (no movement cap)
-  const attemptMoveOnce = (direction) => {
+    const attemptMoveOnce = (direction) => {
     if (!currentPlayerId || !gameState.players[currentPlayerId]) return
     const currentPlayer = gameState.players[currentPlayerId]
     let newX = currentPlayer.x
@@ -187,24 +277,26 @@ function App() {
       case 'right': newX = Math.min(23, newX + 1); setLastFacing('right'); break
       default: return
     }
-    // Collision: block movement into server-authoritative earth blocks
-    const isEarthBlocked = (gameState.blocks || []).some(b => b.x === newX && b.y === newY)
-    if (isEarthBlocked) return
-    // Collision: block movement into resource tiles (wood/stone/gold)
-    const resIdx = newY * GRID_COLS + newX
-    const cellType = resourceMap[resIdx]
-    const isResourceBlocked = cellType && cellType !== 'open'
-    if (isResourceBlocked) return
-    if (newX === currentPlayer.x && newY === currentPlayer.y) return
-    setGameState(prevState => {
-      const newPlayers = { ...prevState.players }
-      if (newPlayers[currentPlayerId]) {
-        newPlayers[currentPlayerId].x = newX
-        newPlayers[currentPlayerId].y = newY
-      }
-      return { ...prevState, players: newPlayers }
-    })
-    if (socket) socket.emit('player_move', { x: newX, y: newY })
+      // Client-side quick checks (players, earth, resource) to avoid obvious rejects
+      const occupiedByPlayer = Object.values(gameState.players || {}).some(p => p.isActive && p.id !== currentPlayerId && p.x === newX && p.y === newY)
+      if (occupiedByPlayer) return
+      const isEarthBlocked = (gameState.blocks || []).some(b => b.x === newX && b.y === newY)
+      if (isEarthBlocked) return
+      const resIdx = newY * GRID_COLS + newX
+      const cellType = resourceMap[resIdx]
+      const isResourceBlocked = cellType && cellType !== 'open'
+      if (isResourceBlocked) return
+      if (newX === currentPlayer.x && newY === currentPlayer.y) return
+      // Optimistic update; server will confirm or correct via events
+      setGameState(prevState => {
+        const newPlayers = { ...prevState.players }
+        if (newPlayers[currentPlayerId]) {
+          newPlayers[currentPlayerId].x = newX
+          newPlayers[currentPlayerId].y = newY
+        }
+        return { ...prevState, players: newPlayers }
+      })
+      if (socket) socket.emit('player_move', { x: newX, y: newY })
   }
 
   // Cast armed spells in a chosen direction, enforcing spell cooldown
@@ -296,6 +388,8 @@ function App() {
       case 'left': targetX = Math.max(0, me.x - 1); break
       case 'right': targetX = Math.min(23, me.x + 1); break
     }
+    // Client-side viability check to avoid emitting impossible placements
+    if (allowedEarthDirections && allowedEarthDirections[dir] === false) return
     if (socket) socket.emit('place_block', { x: targetX, y: targetY })
   }
 
@@ -320,6 +414,24 @@ function App() {
     return () => cancelAnimationFrame(rafId)
   }, [currentPlayerId, socket, lastSpellTime])
 
+  // Regenerate map on 'R' key
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'r' || e.key === 'R') {
+        const newSeed = Math.floor(Math.random() * 1e9)
+        setMapSeed(newSeed)
+        if (socket) {
+          socket.emit('set_map_seed', { seed: newSeed })
+          socket.emit('reset_blocks')
+        }
+        // Immediate local clear for responsiveness
+        setGameState(prev => ({ ...prev, blocks: [] }))
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   return (
     <div className="app">
       <GameCanvas 
@@ -328,6 +440,24 @@ function App() {
         onCanvasClick={handleCanvasClick}
         onCanvasSizeChange={setCanvasSize}
         projectiles={projectiles}
+        mapSeed={mapSeed}
+      />
+      <AdminPanel 
+        onResetBlocks={() => {
+          if (socket) socket.emit('reset_blocks')
+          setGameState(prev => ({ ...prev, blocks: [] }))
+        }}
+        onNewMap={() => {
+          const newSeed = Math.floor(Math.random() * 1e9)
+          setMapSeed(newSeed)
+          if (socket) {
+            socket.emit('set_map_seed', { seed: newSeed })
+            socket.emit('reset_blocks')
+          }
+          setGameState(prev => ({ ...prev, blocks: [] }))
+        }}
+        blocksCount={(gameState.blocks || []).length}
+        playersCount={Object.keys(gameState.players || {}).length}
       />
       <DPad 
         onMove={handleDPadMove}
@@ -339,6 +469,7 @@ function App() {
         cooldownFraction={Math.max(0, Math.min(1, cooldownMsLeft / COOLDOWN_MS))}
         aimDirection={aimDirection}
         armedSpell={armedSpell}
+        allowedDirections={armedSpell === 'earth' ? allowedEarthDirections : allowedMoveDirections}
         onStop={() => { setArmedSpell(null) }}
       />
     </div>

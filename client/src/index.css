@@ -96,6 +96,38 @@ body {
   z-index: 1000;
 }
 
+/* Admin panel */
+.admin-panel {
+  position: fixed;
+  top: 8px;
+  right: 8px;
+  background: rgba(31, 26, 20, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  z-index: 1100;
+  backdrop-filter: blur(4px);
+}
+.admin-panel .stat {
+  color: #cfcfcf;
+  font-size: 12px;
+  opacity: 0.9;
+}
+.admin-panel button {
+  background: #3b3b3b;
+  color: #f0f0f0;
+  border: 1px solid #4a4a4a;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.admin-panel button:hover { background: #4a4a4a; }
+.admin-panel button:active { background: #5a5a5a; }
+
 .dpad {
   display: grid;
   gap: 0;
@@ -146,6 +178,12 @@ body {
 /* When waiting for direction, softly pulse arrow buttons */
 .dpad-button.await-direction {
   animation: pulse-dir 1.2s infinite ease-in-out;
+}
+
+/* Disabled direction when earth is armed but placement is not allowed */
+.dpad-button.disabled {
+  opacity: 0.35;
+  filter: grayscale(60%);
 }
 
 @keyframes pulse-dir {

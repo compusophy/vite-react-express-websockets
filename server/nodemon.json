@@ -1,0 +1,14 @@
+{
+  "ignore": [
+    "database.json",
+    "node_modules",
+    ".git"
+  ],
+  "watch": [
+    "index.js",
+    "package.json"
+  ],
+  "ext": "js,json"
+}
+
+

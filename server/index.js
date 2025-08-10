@@ -33,12 +33,16 @@ const io = new Server(server, {
 const PORT = process.env.PORT || 3000;
 const DATABASE_FILE = 'database.json';
 const SAVE_INTERVAL = 5 * 60 * 1000; // 5 minutes - much more reasonable
+const GRID_COLS = 24;
+const GRID_ROWS = 24;
+const PHI = 0.61803;
 
 // Simple game state - just players
 let gameState = {
   players: {},
   nextPlayerId: 1,
-  blocks: [] // array of { x, y }
+  blocks: [], // array of { x, y }
+  mapSeed: Math.floor(Math.random() * 1e9)
 };
 
 // Helper function to generate a random color for players
@@ -47,17 +51,157 @@ function generateRandomColor() {
   return colors[Math.floor(Math.random() * colors.length)];
 }
 
+// Find nearest open, unoccupied spawn cell starting from center
+function findSpawnCell() {
+  const isCellAvailable = (x, y) => {
+    if (x < 0 || x >= GRID_COLS || y < 0 || y >= GRID_ROWS) return false;
+    // not on resource
+    const type = getCellType(x, y, gameState.mapSeed);
+    if (type && type !== 'open') return false;
+    // not on earth block
+    if ((gameState.blocks || []).some(b => b.x === x && b.y === y)) return false;
+    // not on active player
+    if (Object.values(gameState.players).some(p => p.isActive && p.x === x && p.y === y)) return false;
+    return true;
+  };
+  const startX = Math.floor(GRID_COLS / 2);
+  const startY = Math.floor(GRID_ROWS / 2);
+  if (isCellAvailable(startX, startY)) return { x: startX, y: startY };
+  // Spiral/ring search up to full grid
+  const maxRadius = Math.max(GRID_COLS, GRID_ROWS);
+  for (let r = 1; r <= maxRadius; r++) {
+    for (let dx = -r; dx <= r; dx++) {
+      const candidates = [
+        { x: startX + dx, y: startY - r },
+        { x: startX + dx, y: startY + r }
+      ];
+      for (const c of candidates) {
+        if (isCellAvailable(c.x, c.y)) return c;
+      }
+    }
+    for (let dy = -r + 1; dy <= r - 1; dy++) {
+      const candidates = [
+        { x: startX - r, y: startY + dy },
+        { x: startX + r, y: startY + dy }
+      ];
+      for (const c of candidates) {
+        if (isCellAvailable(c.x, c.y)) return c;
+      }
+    }
+  }
+  // Fallback
+  return { x: startX, y: startY };
+}
+
 // Helper function to create a new player
 function createPlayer(playerId, socketId) {
+  const spawn = findSpawnCell();
   return {
     id: playerId,
     socketId: socketId,
     name: `Player ${playerId}`,
-    x: 12, // Cell coordinate (center of 24x24 grid)
-    y: 12,
+    x: spawn.x,
+    y: spawn.y,
     color: generateRandomColor(),
     isActive: true
   };
+}
+
+function sanitizeLoadedState(loaded) {
+  const sanitized = {
+    players: {},
+    nextPlayerId: 1,
+    blocks: [],
+    mapSeed: Math.floor(Math.random() * 1e9)
+  };
+
+  if (loaded && typeof loaded === 'object') {
+    if (loaded.players && typeof loaded.players === 'object' && !Array.isArray(loaded.players)) {
+      sanitized.players = loaded.players;
+    }
+    if (Number.isInteger(loaded.nextPlayerId) && loaded.nextPlayerId > 0) {
+      sanitized.nextPlayerId = loaded.nextPlayerId;
+    } else {
+      const maxId = Object.keys(sanitized.players).reduce((m, k) => Math.max(m, Number(k) || 0), 0);
+      sanitized.nextPlayerId = maxId + 1;
+    }
+    if (Array.isArray(loaded.blocks)) {
+      sanitized.blocks = loaded.blocks
+        .filter(b => b && Number.isInteger(b.x) && Number.isInteger(b.y))
+        .map(b => ({ x: Math.max(0, Math.min(23, b.x)), y: Math.max(0, Math.min(23, b.y)) }));
+    }
+    if (Number.isInteger(loaded.mapSeed) && loaded.mapSeed >= 0) {
+      sanitized.mapSeed = loaded.mapSeed;
+    }
+  }
+
+  // Ensure no duplicates in blocks
+  const seen = new Set();
+  sanitized.blocks = sanitized.blocks.filter(b => {
+    const key = `${b.x},${b.y}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  // Mark players inactive at boot
+  Object.values(sanitized.players).forEach(p => {
+    p.isActive = false;
+    p.socketId = null;
+  });
+
+  return sanitized;
+}
+
+// Deterministic PRNG (xorshift32)
+function makeRng(seed) {
+  let s = (seed >>> 0) || 0x9e3779b1;
+  return () => {
+    s ^= s << 13; s >>>= 0;
+    s ^= s >> 17; s >>>= 0;
+    s ^= s << 5;  s >>>= 0;
+    return (s >>> 0) / 4294967296;
+  };
+}
+
+// Build a golden-ratio distributed resource map like the client
+function buildResourceTypes(seed) {
+  const total = GRID_COLS * GRID_ROWS;
+  const rng = makeRng(seed);
+  const indices = Array.from({ length: total }, (_, i) => i);
+  for (let i = total - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    const tmp = indices[i];
+    indices[i] = indices[j];
+    indices[j] = tmp;
+  }
+  const openCount = Math.round(PHI * total);
+  const rem1 = total - openCount;
+  const treesCount = Math.round(PHI * rem1);
+  const rem2 = rem1 - treesCount;
+  const stoneCount = Math.round(PHI * rem2);
+  const rem3 = rem2 - stoneCount;
+  const goldCount = Math.round(PHI * rem3);
+  const rem4 = rem3 - goldCount;
+  const diamondCount = Math.round(PHI * rem4);
+  const types = new Array(total).fill('open');
+  let idx = 0;
+  idx += openCount;
+  for (let k = 0; k < treesCount && idx + k < total; k++) types[indices[idx + k]] = 'wood';
+  idx += treesCount;
+  for (let k = 0; k < stoneCount && idx + k < total; k++) types[indices[idx + k]] = 'stone';
+  idx += stoneCount;
+  for (let k = 0; k < goldCount && idx + k < total; k++) types[indices[idx + k]] = 'gold';
+  idx += goldCount;
+  for (let k = 0; k < diamondCount && idx + k < total; k++) types[indices[idx + k]] = 'diamond';
+  return types;
+}
+
+function getCellType(x, y, seed) {
+  if (x < 0 || x >= GRID_COLS || y < 0 || y >= GRID_ROWS) return 'open';
+  const types = buildResourceTypes(seed);
+  const idx = y * GRID_COLS + x;
+  return types[idx] || 'open';
 }
 
 // Load game state from database.json
@@ -66,23 +210,15 @@ function loadGameState() {
     if (fs.existsSync(DATABASE_FILE)) {
       const data = fs.readFileSync(DATABASE_FILE, 'utf8');
       const loadedState = JSON.parse(data);
-      
-      gameState = {
-        ...gameState,
-        ...loadedState
-      };
-      if (!Array.isArray(gameState.blocks)) {
-        gameState.blocks = []
-      }
-      
-      // Mark all loaded players as inactive since their socket connections are dead
-      Object.values(gameState.players).forEach(player => {
-        player.isActive = false;
-        player.socketId = null;
-      });
-      
-      console.log('Game state loaded from database.json');
+
+      const sanitized = sanitizeLoadedState(loadedState);
+      gameState = sanitized;
+
+      console.log('Game state loaded from database.json (sanitized)');
       console.log(`Loaded ${Object.keys(gameState.players).length} players (all marked inactive)`);
+
+      // Persist sanitized structure back to disk to drop obsolete fields
+      saveGameState();
     } else {
       console.log('No database found, starting with fresh state');
     }
@@ -162,38 +298,106 @@ io.on('connection', (socket) => {
     });
   }
   
-  // Handle player movement
+  // Handle player movement (server-authoritative collision)
   socket.on('player_move', (data) => {
-    const { x, y } = data;
+    const { x, y } = data || {};
     const player = Object.values(gameState.players).find(p => p.socketId === socket.id);
-    
-    if (player) {
-      player.x = x;
-      player.y = y;
-      
-      io.emit('player_moved', {
-        playerId: player.id,
-        x: x,
-        y: y
-      });
-      
-      console.log(`Player ${player.name} moved to cell (${x}, ${y})`);
+    if (!player) return;
+
+    // Validate and clamp
+    const targetX = Math.max(0, Math.min(23, Math.floor(Number(x))));
+    const targetY = Math.max(0, Math.min(23, Math.floor(Number(y))));
+
+    // If no movement, just confirm current position
+    if (player.x === targetX && player.y === targetY) {
+      socket.emit('player_position', { playerId: player.id, x: player.x, y: player.y });
+      return;
     }
+
+    // Reject if occupied by active other player
+    const occupiedByOther = Object.values(gameState.players).some(p => p.isActive && p.id !== player.id && p.x === targetX && p.y === targetY);
+    if (occupiedByOther) {
+      socket.emit('player_position', { playerId: player.id, x: player.x, y: player.y });
+      return;
+    }
+
+    // Reject if blocked by an earth block
+    const blockedByEarth = (gameState.blocks || []).some(b => b.x === targetX && b.y === targetY);
+    if (blockedByEarth) {
+      socket.emit('player_position', { playerId: player.id, x: player.x, y: player.y });
+      return;
+    }
+
+    // Reject if non-open resource tile
+    const cellType = getCellType(targetX, targetY, gameState.mapSeed);
+    if (cellType && cellType !== 'open') {
+      socket.emit('player_position', { playerId: player.id, x: player.x, y: player.y });
+      return;
+    }
+
+    // Accept move
+    player.x = targetX;
+    player.y = targetY;
+
+    io.emit('player_moved', { playerId: player.id, x: targetX, y: targetY });
+    socket.emit('player_position', { playerId: player.id, x: targetX, y: targetY });
+    console.log(`Player ${player.name} moved to cell (${targetX}, ${targetY})`);
   });
 
-  // Handle block placement
+  // Handle block placement or removal (toggle)
   socket.on('place_block', (data) => {
     const { x, y } = data || {}
     if (typeof x !== 'number' || typeof y !== 'number') return
     // clamp to grid 0..23
     const cx = Math.max(0, Math.min(23, Math.floor(x)))
     const cy = Math.max(0, Math.min(23, Math.floor(y)))
-    // prevent duplicates
     const exists = gameState.blocks.some(b => b.x === cx && b.y === cy)
-    if (exists) return
+    const occupiedByPlayer = Object.values(gameState.players).some(p => p.isActive && p.x === cx && p.y === cy)
+    if (exists) {
+      // Remove existing block if not occupied by a player
+      if (occupiedByPlayer) {
+        console.log(`Reject block removal at (${cx}, ${cy}) - occupied by player`)
+        return
+      }
+      gameState.blocks = gameState.blocks.filter(b => !(b.x === cx && b.y === cy))
+      io.emit('block_removed', { x: cx, y: cy })
+      console.log(`Block removed at (${cx}, ${cy})`)
+      saveGameState()
+      return
+    }
+    // Add block path: ensure not on player and not on resource
+    if (occupiedByPlayer) {
+      console.log(`Reject block at (${cx}, ${cy}) - occupied by player`)
+      return
+    }
+    const cellType = getCellType(cx, cy, gameState.mapSeed)
+    if (cellType !== 'open') {
+      console.log(`Reject block at (${cx}, ${cy}) - resource cell: ${cellType}`)
+      return
+    }
     gameState.blocks.push({ x: cx, y: cy })
     io.emit('block_added', { x: cx, y: cy })
     console.log(`Block placed at (${cx}, ${cy})`)
+    saveGameState()
+  })
+
+  // Handle reset of all blocks (earth walls)
+  socket.on('reset_blocks', () => {
+    gameState.blocks = []
+    io.emit('blocks_reset')
+    console.log('All blocks reset by client request')
+    // Persist immediately so DB clears placed blocks
+    saveGameState()
+  })
+
+  // Sync map seed from client so server validation matches client map
+  socket.on('set_map_seed', (data) => {
+    const { seed } = data || {}
+    if (!Number.isInteger(seed)) return
+    gameState.mapSeed = seed >>> 0
+    io.emit('map_seed', { seed: gameState.mapSeed })
+    console.log(`Map seed updated to ${gameState.mapSeed}`)
+    saveGameState()
   })
   
   // Handle disconnection
