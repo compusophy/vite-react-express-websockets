@@ -42,7 +42,9 @@ let gameState = {
   players: {},
   nextPlayerId: 1,
   blocks: [], // array of { x, y }
-  mapSeed: Math.floor(Math.random() * 1e9)
+  mapSeed: Math.floor(Math.random() * 1e9),
+  projectiles: [], // { id, type, x, y, vx, vy, ownerId }
+  harvested: [] // array of { x, y }
 };
 
 // Helper function to generate a random color for players
@@ -103,7 +105,13 @@ function createPlayer(playerId, socketId) {
     x: spawn.x,
     y: spawn.y,
     color: generateRandomColor(),
-    isActive: true
+    isActive: true,
+    hp: 100,
+    inventory: { wood: 0, stone: 0, gold: 0, diamond: 0 },
+    skills: {
+      mining: { level: 1, xp: 0 },
+      woodcutting: { level: 1, xp: 0 }
+    }
   };
 }
 
@@ -112,7 +120,9 @@ function sanitizeLoadedState(loaded) {
     players: {},
     nextPlayerId: 1,
     blocks: [],
-    mapSeed: Math.floor(Math.random() * 1e9)
+    mapSeed: Math.floor(Math.random() * 1e9),
+    projectiles: [],
+    harvested: []
   };
 
   if (loaded && typeof loaded === 'object') {
@@ -133,6 +143,15 @@ function sanitizeLoadedState(loaded) {
     if (Number.isInteger(loaded.mapSeed) && loaded.mapSeed >= 0) {
       sanitized.mapSeed = loaded.mapSeed;
     }
+    if (Array.isArray(loaded.projectiles)) {
+      // do not restore in-flight projectiles across restarts
+      sanitized.projectiles = []
+    }
+    if (Array.isArray(loaded.harvested)) {
+      sanitized.harvested = loaded.harvested
+        .filter(h => h && Number.isInteger(h.x) && Number.isInteger(h.y))
+        .map(h => ({ x: Math.max(0, Math.min(23, h.x)), y: Math.max(0, Math.min(23, h.y)) }))
+    }
   }
 
   // Ensure no duplicates in blocks
@@ -144,10 +163,30 @@ function sanitizeLoadedState(loaded) {
     return true;
   });
 
-  // Mark players inactive at boot
+  // Mark players inactive at boot and ensure hp/inventory exists
   Object.values(sanitized.players).forEach(p => {
     p.isActive = false;
     p.socketId = null;
+    if (typeof p.hp !== 'number' || !Number.isFinite(p.hp)) p.hp = 100;
+    if (!p.inventory || typeof p.inventory !== 'object') {
+      p.inventory = { wood: 0, stone: 0, gold: 0, diamond: 0 }
+    } else {
+      p.inventory.wood = Number(p.inventory.wood) || 0
+      p.inventory.stone = Number(p.inventory.stone) || 0
+      p.inventory.gold = Number(p.inventory.gold) || 0
+      p.inventory.diamond = Number(p.inventory.diamond) || 0
+    }
+    if (!p.skills || typeof p.skills !== 'object') {
+      p.skills = {
+        mining: { level: 1, xp: 0 },
+        woodcutting: { level: 1, xp: 0 }
+      }
+    } else {
+      const m = p.skills.mining || {}
+      const w = p.skills.woodcutting || {}
+      p.skills.mining = { level: Number(m.level) || 1, xp: Number(m.xp) || 0 }
+      p.skills.woodcutting = { level: Number(w.level) || 1, xp: Number(w.xp) || 0 }
+    }
   });
 
   return sanitized;
@@ -271,6 +310,7 @@ io.on('connection', (socket) => {
     // Reuse existing inactive player
     player.socketId = socket.id;
     player.isActive = true;
+    player.hp = 100;
     console.log(`Reactivated existing player: ${player.name}`);
   } else {
     // Create new player
@@ -303,6 +343,11 @@ io.on('connection', (socket) => {
     const { x, y } = data || {};
     const player = Object.values(gameState.players).find(p => p.socketId === socket.id);
     if (!player) return;
+    // Disallow movement for dead/inactive players
+    if (!player.isActive || (typeof player.hp === 'number' && player.hp <= 0)) {
+      socket.emit('player_position', { playerId: player.id, x: player.x, y: player.y });
+      return;
+    }
 
     // Validate and clamp
     const targetX = Math.max(0, Math.min(23, Math.floor(Number(x))));
@@ -330,7 +375,8 @@ io.on('connection', (socket) => {
 
     // Reject if non-open resource tile
     const cellType = getCellType(targetX, targetY, gameState.mapSeed);
-    if (cellType && cellType !== 'open') {
+    const harvestedHere = (gameState.harvested || []).some(h => h.x === targetX && h.y === targetY)
+    if (!harvestedHere && cellType && cellType !== 'open') {
       socket.emit('player_position', { playerId: player.id, x: player.x, y: player.y });
       return;
     }
@@ -346,6 +392,8 @@ io.on('connection', (socket) => {
 
   // Handle block placement or removal (toggle)
   socket.on('place_block', (data) => {
+    const acting = Object.values(gameState.players).find(p => p.socketId === socket.id)
+    if (!acting || !acting.isActive || (typeof acting.hp === 'number' && acting.hp <= 0)) return
     const { x, y } = data || {}
     if (typeof x !== 'number' || typeof y !== 'number') return
     // clamp to grid 0..23
@@ -381,8 +429,129 @@ io.on('connection', (socket) => {
     saveGameState()
   })
 
+  // Harvest resource (collect and mark as harvested)
+  socket.on('harvest', (data) => {
+    const actor = Object.values(gameState.players).find(p => p.socketId === socket.id)
+    if (!actor || !actor.isActive || (typeof actor.hp === 'number' && actor.hp <= 0)) return
+    const { x, y } = data || {}
+    if (!Number.isInteger(x) || !Number.isInteger(y)) return
+    if (x < 0 || x > 23 || y < 0 || y > 23) return
+    // Must be adjacent (4-dir) only
+    const dist = Math.abs(actor.x - x) + Math.abs(actor.y - y)
+    if (dist !== 1) return
+    // Cannot harvest if already harvested
+    if ((gameState.harvested || []).some(h => h.x === x && h.y === y)) return
+    const type = getCellType(x, y, gameState.mapSeed)
+    if (!type || type === 'open') return
+    // Disallow harvesting if another active player stands on the cell
+    const occupied = Object.values(gameState.players).some(p => p.isActive && p.x === x && p.y === y)
+    if (occupied) return
+    // Update inventory and mark harvested; grant skill XP
+    actor.inventory = actor.inventory || { wood: 0, stone: 0, gold: 0, diamond: 0 }
+    actor.skills = actor.skills || { mining: { level: 1, xp: 0 }, woodcutting: { level: 1, xp: 0 } }
+    const grantXp = (skillKey, amount) => {
+      const skill = actor.skills[skillKey] || { level: 1, xp: 0 }
+      skill.xp += amount
+      // Simple level-up curve: level*100 xp per level
+      while (skill.xp >= skill.level * 100) {
+        skill.xp -= skill.level * 100
+        skill.level += 1
+      }
+      actor.skills[skillKey] = skill
+    }
+    if (type === 'wood') { actor.inventory.wood += 1; grantXp('woodcutting', 10) }
+    else if (type === 'stone') { actor.inventory.stone += 1; grantXp('mining', 12) }
+    else if (type === 'gold') { actor.inventory.gold += 1; grantXp('mining', 20) }
+    else if (type === 'diamond') { actor.inventory.diamond += 1; grantXp('mining', 35) }
+    gameState.harvested.push({ x, y })
+    io.emit('harvested', { x, y, type, playerId: actor.id, inventory: actor.inventory, skills: actor.skills })
+    saveGameState()
+  })
+
+  // Player respawn request (reuse same player id; no total count increase)
+  socket.on('player_respawn', () => {
+    const player = Object.values(gameState.players).find(p => p.socketId === socket.id)
+    if (!player) return
+    const spawn = findSpawnCell()
+    player.x = spawn.x
+    player.y = spawn.y
+    player.hp = 100
+    player.isActive = true
+    io.emit('player_respawned', { player, oldPlayerId: player.id })
+    saveGameState()
+  })
+
+  // Handle projectile spawn (server-authoritative collision and damage)
+  socket.on('projectile_spawn', (data) => {
+    const acting = Object.values(gameState.players).find(p => p.socketId === socket.id)
+    if (!acting || !acting.isActive || (typeof acting.hp === 'number' && acting.hp <= 0)) return
+    const { id, type, x, y, vx, vy, ownerId } = data || {}
+    if (type !== 'fireball') return
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(vx) || !Number.isFinite(vy)) return
+    const speed = Math.hypot(vx, vy)
+    if (speed <= 0) return
+
+    const projectile = { id: String(id || `${Date.now()}-${Math.random()}`), type, x, y, vx, vy, ownerId }
+    gameState.projectiles.push(projectile)
+
+    // Broadcast spawn so other clients can render immediately
+    io.emit('projectile_spawn', projectile)
+
+    // Simulate movement in small steps server-side until collision, but emit at time-of-impact
+    const maxSimTime = 60 // allow full-map range at typical speeds
+    const step = 1 / 60 // 60 Hz
+    let elapsed = 0
+    let alive = true
+    let hitPlayerId = null
+    let finalX = projectile.x
+    let finalY = projectile.y
+    while (alive && elapsed < maxSimTime) {
+      // advance
+      finalX += projectile.vx * step
+      finalY += projectile.vy * step
+      elapsed += step
+
+      // cell coords
+      const cx = Math.floor(finalX)
+      const cy = Math.floor(finalY)
+      if (cx < 0 || cx > 23 || cy < 0 || cy > 23) { alive = false; break }
+
+      // collision: earth blocks
+      if ((gameState.blocks || []).some(b => b.x === cx && b.y === cy)) { alive = false; break }
+
+      // collision: resource
+      const cellType = getCellType(cx, cy, gameState.mapSeed)
+      if (cellType && cellType !== 'open') { alive = false; break }
+
+      // collision: player unit (excluding owner)
+      const target = Object.values(gameState.players).find(p => p.isActive && p.id !== ownerId && p.x === cx && p.y === cy)
+      if (target) {
+        hitPlayerId = target.id
+        alive = false
+        break
+      }
+    }
+
+    const delayMs = Math.max(0, Math.floor(elapsed * 1000))
+    setTimeout(() => {
+      if (hitPlayerId) {
+        const target = gameState.players[hitPlayerId]
+        if (target) {
+          target.hp = 0
+          target.isActive = false
+          io.emit('player_hit', { playerId: target.id, hp: target.hp, by: ownerId })
+          io.emit('player_died', { playerId: target.id, by: ownerId })
+        }
+      }
+      gameState.projectiles = gameState.projectiles.filter(p => p.id !== projectile.id)
+      io.emit('projectile_stop', { id: projectile.id, x: finalX, y: finalY })
+    }, delayMs)
+  })
+
   // Handle reset of all blocks (earth walls)
   socket.on('reset_blocks', () => {
+    const acting = Object.values(gameState.players).find(p => p.socketId === socket.id)
+    if (!acting || !acting.isActive || (typeof acting.hp === 'number' && acting.hp <= 0)) return
     gameState.blocks = []
     io.emit('blocks_reset')
     console.log('All blocks reset by client request')
@@ -392,6 +561,8 @@ io.on('connection', (socket) => {
 
   // Sync map seed from client so server validation matches client map
   socket.on('set_map_seed', (data) => {
+    const acting = Object.values(gameState.players).find(p => p.socketId === socket.id)
+    if (!acting || !acting.isActive || (typeof acting.hp === 'number' && acting.hp <= 0)) return
     const { seed } = data || {}
     if (!Number.isInteger(seed)) return
     gameState.mapSeed = seed >>> 0

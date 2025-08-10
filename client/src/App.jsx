@@ -12,7 +12,8 @@ function App() {
   const [socket, setSocket] = useState(null)
   const [gameState, setGameState] = useState({
     players: {},
-    blocks: []
+    blocks: [],
+    harvested: []
   })
   const [currentPlayerId, setCurrentPlayerId] = useState(null)
   const [canvasSize, setCanvasSize] = useState({ width: 300, height: 300 })
@@ -22,6 +23,14 @@ function App() {
   const [armedSpell, setArmedSpell] = useState(null) // 'fire' | 'water' | 'earth' | null
   const [lastSpellTime, setLastSpellTime] = useState(0) // Spell-only cooldown anchor (ms)
   const [cooldownMsLeft, setCooldownMsLeft] = useState(0)
+  // Removed top toast in favor of the death modal only
+  const [toast, setToast] = useState(null)
+  const isMeDead = useMemo(() => {
+    if (!currentPlayerId) return false
+    const me = gameState.players[currentPlayerId]
+    if (!me) return false
+    return !me.isActive || (typeof me.hp === 'number' && me.hp <= 0)
+  }, [currentPlayerId, gameState.players])
   
   // Golden ratio-based resource map (deterministic, client-side) for collision
   const PHI = 0.61803
@@ -98,6 +107,7 @@ function App() {
   const allowedMoveDirections = useMemo(() => {
     if (!currentPlayerId || !gameState.players[currentPlayerId]) return null
     const me = gameState.players[currentPlayerId]
+    const harvestedSet = new Set((gameState.harvested || []).map(h => `${h.x},${h.y}`))
     const isCellWalkable = (tx, ty) => {
       if (tx < 0 || tx > 23 || ty < 0 || ty > 23) return false
       // cannot move into server blocks
@@ -105,7 +115,7 @@ function App() {
       // cannot move into non-open resource
       const idx = ty * GRID_COLS + tx
       const type = resourceMap[idx]
-      if (type && type !== 'open') return false
+      if (type && type !== 'open' && !harvestedSet.has(`${tx},${ty}`)) return false
       // cannot move into tile with another active player
       const occupied = Object.values(gameState.players || {}).some(p => p.isActive && p.id !== currentPlayerId && p.x === tx && p.y === ty)
       if (occupied) return false
@@ -118,6 +128,35 @@ function App() {
       right: isCellWalkable(Math.min(23, me.x + 1), me.y)
     }
   }, [currentPlayerId, gameState.players, gameState.blocks, resourceMap])
+
+  // Compute viable directions for harvesting (resource present, not harvested, not occupied)
+  const allowedHarvestDirections = useMemo(() => {
+    if (!currentPlayerId || !gameState.players[currentPlayerId]) return null
+    const me = gameState.players[currentPlayerId]
+    const harvestedSet = new Set((gameState.harvested || []).map(h => `${h.x},${h.y}`))
+    const isHarvestable = (tx, ty) => {
+      if (tx < 0 || tx > 23 || ty < 0 || ty > 23) return false
+      const idx = ty * GRID_COLS + tx
+      const type = resourceMap[idx]
+      if (!type || type === 'open') return false
+      if (harvestedSet.has(`${tx},${ty}`)) return false
+      const occupied = Object.values(gameState.players || {}).some(p => p.isActive && p.x === tx && p.y === ty)
+      if (occupied) return false
+      return true
+    }
+    return {
+      up: isHarvestable(me.x, Math.max(0, me.y - 1)),
+      down: isHarvestable(me.x, Math.min(23, me.y + 1)),
+      left: isHarvestable(Math.max(0, me.x - 1), me.y),
+      right: isHarvestable(Math.min(23, me.x + 1), me.y)
+    }
+  }, [currentPlayerId, gameState.players, gameState.harvested, resourceMap])
+
+  const canUsePickaxe = useMemo(() => {
+    const dirs = allowedHarvestDirections
+    if (!dirs) return false
+    return !!(dirs.up || dirs.down || dirs.left || dirs.right)
+  }, [allowedHarvestDirections])
 
   useEffect(() => {
     const serverUrl = import.meta.env.PROD 
@@ -226,14 +265,64 @@ function App() {
       if (Number.isInteger(seed)) setMapSeed(seed)
     })
 
+    // Server projectile collision results
+    newSocket.on('projectile_spawn', (p) => {
+      // Render any projectile exactly as server reports
+      setProjectiles(prev => prev.some(x => x.id === p.id) ? prev.map(x => x.id === p.id ? p : x) : [...prev, p])
+    })
+    newSocket.on('projectile_stop', ({ id }) => {
+      setProjectiles(prev => prev.filter(p => p.id !== id))
+    })
+    newSocket.on('player_hit', ({ playerId, hp }) => {
+      setGameState(prev => {
+        const players = { ...prev.players }
+        if (players[playerId]) players[playerId].hp = hp
+        return { ...prev, players }
+      })
+    })
+
+    newSocket.on('harvested', ({ x, y, type, playerId, inventory, skills }) => {
+      setGameState(prev => ({
+        ...prev,
+        harvested: [...(prev.harvested || []), { x, y }],
+        players: {
+          ...prev.players,
+          [playerId]: prev.players[playerId]
+            ? { ...prev.players[playerId], inventory, skills }
+            : prev.players[playerId]
+        }
+      }))
+    })
+
+    newSocket.on('player_died', ({ playerId }) => {
+      setGameState(prev => {
+        const players = { ...prev.players }
+        if (players[playerId]) players[playerId].isActive = false
+        return { ...prev, players }
+      })
+      // No top toast anymore; death is indicated by the modal
+    })
+
+    newSocket.on('player_respawned', ({ player, oldPlayerId }) => {
+      setGameState(prev => {
+        const players = { ...prev.players }
+        // Reuse same id; overwrite data
+        players[player.id] = player
+        return { ...prev, players }
+      })
+      // Only switch control if this client owned the old player id
+      setCurrentPlayerId(prevId => (prevId === oldPlayerId ? player.id : prevId))
+      setArmedSpell(null)
+    })
+
     return () => {
       newSocket.close()
     }
   }, [])
 
   const handleCanvasClick = (x, y) => {
-    // Move one tile toward click, or cast armed spell in that direction
     if (!currentPlayerId || !gameState.players[currentPlayerId]) return
+    // Move one tile toward click, or cast armed spell in that direction
     const me = gameState.players[currentPlayerId]
     const dx = x - me.x
     const dy = y - me.y
@@ -254,6 +343,23 @@ function App() {
   const handleDPadMove = (direction) => {
     // If a spell is armed, consume this direction to cast; otherwise move one tile
     setAimDirection(direction)
+    if (harvestArmed) {
+      // Attempt harvest in chosen direction
+      const me = gameState.players[currentPlayerId]
+      let tx = me.x, ty = me.y
+      if (direction === 'up') ty = Math.max(0, me.y - 1)
+      else if (direction === 'down') ty = Math.min(23, me.y + 1)
+      else if (direction === 'left') tx = Math.max(0, me.x - 1)
+      else if (direction === 'right') tx = Math.min(23, me.x + 1)
+      if (!allowedHarvestDirections || allowedHarvestDirections[direction]) {
+        const now = performance.now()
+        if (now - lastSpellTime < COOLDOWN_MS) { setHarvestArmed(false); return }
+        setLastSpellTime(now)
+        if (socket) socket.emit('harvest', { x: tx, y: ty })
+      }
+      setHarvestArmed(false)
+      return
+    }
     if (armedSpell) {
       if (armedSpell === 'earth' && allowedEarthDirections && allowedEarthDirections[direction] === false) {
         return
@@ -284,7 +390,8 @@ function App() {
       if (isEarthBlocked) return
       const resIdx = newY * GRID_COLS + newX
       const cellType = resourceMap[resIdx]
-      const isResourceBlocked = cellType && cellType !== 'open'
+      const harvestedSet = new Set((gameState.harvested || []).map(h => `${h.x},${h.y}`))
+      const isResourceBlocked = cellType && cellType !== 'open' && !harvestedSet.has(`${newX},${newY}`)
       if (isResourceBlocked) return
       if (newX === currentPlayer.x && newY === currentPlayer.y) return
       // Optimistic update; server will confirm or correct via events
@@ -337,6 +444,7 @@ function App() {
       ...prev,
       { id, type: 'fireball', x: caster.x + 0.5, y: caster.y + 0.5, vx: velocity.x, vy: velocity.y }
     ])
+    if (socket) socket.emit('projectile_spawn', { id, type: 'fireball', x: caster.x + 0.5, y: caster.y + 0.5, vx: velocity.x, vy: velocity.y, ownerId: currentPlayerId })
   }
 
   // Arm water spell; cast on next direction
@@ -393,6 +501,9 @@ function App() {
     if (socket) socket.emit('place_block', { x: targetX, y: targetY })
   }
 
+  // Harvest selection mode: one tap on pickaxe arms harvest, next canvas click selects target tile to harvest
+  const [harvestArmed, setHarvestArmed] = useState(false)
+
   // Animate projectiles
   useEffect(() => {
     let rafId
@@ -405,9 +516,15 @@ function App() {
       setCooldownMsLeft(Math.max(0, COOLDOWN_MS - (now - lastSpellTime)))
       // No autorun movement; movement is one-to-one per input
       setProjectiles(prev => prev
-        .map(p => ({ ...p, x: p.x + p.vx * dtSec, y: p.y + p.vy * dtSec }))
-        .filter(p => p.x >= 0 && p.x <= 23.99 && p.y >= 0 && p.y <= 23.99)
+        .map(p => ({
+          ...p,
+          x: p.x + p.vx * dtSec,
+          y: p.y + p.vy * dtSec,
+          ttlMs: p.ttlMs != null ? Math.max(0, p.ttlMs - (dtSec * 1000)) : p.ttlMs
+        }))
+        .filter(p => (p.x >= 0 && p.x <= 23.99 && p.y >= 0 && p.y <= 23.99) && (p.ttlMs == null || p.ttlMs > 0))
       )
+      // No toast lifecycle anymore
       rafId = requestAnimationFrame(tick)
     }
     rafId = requestAnimationFrame(tick)
@@ -442,6 +559,30 @@ function App() {
         projectiles={projectiles}
         mapSeed={mapSeed}
       />
+      {/* Top toast removed; using only the death modal */}
+      {isMeDead && (
+        <div style={{
+          position: 'fixed', left: 0, top: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          zIndex: 1100
+        }}>
+          <div style={{
+            background: '#111', color: '#fff', padding: 20, borderRadius: 10, width: 280,
+            textAlign: 'center', boxShadow: '0 10px 30px rgba(0,0,0,0.5)'
+          }}>
+            <div style={{ fontSize: 18, marginBottom: 10 }}>You died</div>
+            <button
+              style={{
+                display: 'inline-block', marginTop: 8, padding: '10px 14px', borderRadius: 8,
+                background: '#22c55e', border: 'none', color: '#111', fontWeight: 700, cursor: 'pointer'
+              }}
+              onClick={() => socket && socket.emit('player_respawn')}
+            >
+              Play Again
+            </button>
+          </div>
+        </div>
+      )}
       <AdminPanel 
         onResetBlocks={() => {
           if (socket) socket.emit('reset_blocks')
@@ -459,19 +600,37 @@ function App() {
         blocksCount={(gameState.blocks || []).length}
         playersCount={Object.keys(gameState.players || {}).length}
       />
+      {!isMeDead && (
       <DPad 
-        onMove={handleDPadMove}
-        onSpell={handleSpellCast}
-        onFrost={handleFrostCast}
-        onArmEarth={() => setArmedSpell('earth')}
+          onMove={handleDPadMove}
+          onSpell={handleSpellCast}
+          onFrost={handleFrostCast}
+        onArmEarth={() => setArmedSpell(prev => {
+          const next = prev === 'earth' ? null : 'earth'
+          if (next === 'earth') setHarvestArmed(false)
+          return next
+        })}
         onArmAir={() => setArmedSpell('air')}
-        canvasSize={canvasSize}
-        cooldownFraction={Math.max(0, Math.min(1, cooldownMsLeft / COOLDOWN_MS))}
-        aimDirection={aimDirection}
-        armedSpell={armedSpell}
-        allowedDirections={armedSpell === 'earth' ? allowedEarthDirections : allowedMoveDirections}
-        onStop={() => { setArmedSpell(null) }}
-      />
+        onPickaxe={() => {
+          // Share the same cooldown as spells; arming is instant, but harvest occurs on arrow press
+          const now = performance.now()
+          if (now - lastSpellTime < COOLDOWN_MS) return
+          setHarvestArmed(prev => {
+            const next = !prev
+            if (next) setArmedSpell(null)
+            return next
+          })
+        }}
+        harvestArmed={harvestArmed}
+        canUsePickaxe={canUsePickaxe}
+          canvasSize={canvasSize}
+          cooldownFraction={Math.max(0, Math.min(1, cooldownMsLeft / COOLDOWN_MS))}
+          aimDirection={aimDirection}
+          armedSpell={armedSpell}
+        allowedDirections={harvestArmed ? allowedHarvestDirections : (armedSpell === 'earth' ? allowedEarthDirections : allowedMoveDirections)}
+          onStop={() => { setArmedSpell(null) }}
+        />
+      )}
     </div>
   )
 }

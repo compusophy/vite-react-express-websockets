@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react'
-import { ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Flame, Droplet, Square, Mountain, Wind } from 'lucide-react'
+import { ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Flame, Droplet, Pickaxe, Mountain, Wind } from 'lucide-react'
 
 const DPad = ({ 
   onMove, 
@@ -14,6 +14,9 @@ const DPad = ({
   aimDirection = null,
   armedSpell = null,
   allowedDirections = null,
+  onPickaxe,
+  harvestArmed = false,
+  canUsePickaxe = true,
 }) => {
   const [dpadSize, setDpadSize] = useState({ buttonSize: 40, iconSize: 24 })
 
@@ -65,8 +68,11 @@ const DPad = ({
     const baseClass = 'dpad-button'
     const isArrow = direction === 'up' || direction === 'down' || direction === 'left' || direction === 'right'
     const allowed = isArrow && allowedDirections ? !!allowedDirections[direction] : true
-    const disabledClass = allowed ? '' : ' disabled'
-    return `${baseClass} ${direction}${disabledClass}`
+    const isCenter = direction === 'center'
+    const isDisabled = isArrow ? !allowed : (isCenter ? !canUsePickaxe : false)
+    const disabledClass = isDisabled ? ' disabled' : ''
+    const activeClass = (direction === 'earth' && armedSpell === 'earth') || (direction === 'center' && harvestArmed) ? ' aim' : ''
+    return `${baseClass} ${direction}${disabledClass}${activeClass}`
   }
 
   return (
@@ -106,12 +112,8 @@ const DPad = ({
         </button>
 
         {/* Up button */}
-        <button
-          className={
-            getButtonClass('up') +
-            (armedSpell && (!allowedDirections || allowedDirections.up) ? ' await-direction' : '') +
-            (armedSpell && aimDirection === 'up' ? ' aim' : '')
-          }
+          <button
+          className={getButtonClass('up')}
           style={{
             width: `${dpadSize.buttonSize}px`,
             height: `${dpadSize.buttonSize}px`
@@ -148,11 +150,7 @@ const DPad = ({
         {/* Left and Right buttons */}
         <div className="dpad-horizontal">
           <button
-            className={
-            getButtonClass('left') +
-            (armedSpell && (!allowedDirections || allowedDirections.left) ? ' await-direction' : '') +
-            (armedSpell && aimDirection === 'left' ? ' aim' : '')
-            }
+            className={getButtonClass('left')}
             style={{
               width: `${dpadSize.buttonSize}px`,
               height: `${dpadSize.buttonSize}px`
@@ -169,19 +167,28 @@ const DPad = ({
               width: `${dpadSize.buttonSize}px`,
               height: `${dpadSize.buttonSize}px`
             }}
-            onPointerDown={() => onStop && onStop()}
+            onPointerDown={() => {
+              if (!canUsePickaxe) return
+              if (onPickaxe) onPickaxe()
+              else if (onStop) onStop()
+            }}
             onPointerUp={clearFocus}
-            aria-label="Stop"
+            aria-label="Pickaxe / Harvest"
           >
-            <Square size={dpadSize.iconSize} strokeWidth={3} />
+            <div className="spell-icon-wrapper">
+              <Pickaxe size={dpadSize.iconSize} strokeWidth={3} />
+              {cooldownFraction > 0 && (
+                <div 
+                  className="cooldown-overlay"
+                  style={{ height: `${cooldownFraction * 100}%` }}
+                  aria-hidden="true"
+                />
+              )}
+            </div>
           </button>
           
           <button
-            className={
-            getButtonClass('right') +
-            (armedSpell && (!allowedDirections || allowedDirections.right) ? ' await-direction' : '') +
-            (armedSpell && aimDirection === 'right' ? ' aim' : '')
-            }
+            className={getButtonClass('right')}
             style={{
               width: `${dpadSize.buttonSize}px`,
               height: `${dpadSize.buttonSize}px`
@@ -194,12 +201,8 @@ const DPad = ({
         </div>
         
         {/* Down button */}
-        <button
-          className={
-            getButtonClass('down') +
-            (armedSpell && (!allowedDirections || allowedDirections.down) ? ' await-direction' : '') +
-            (armedSpell && aimDirection === 'down' ? ' aim' : '')
-          }
+          <button
+            className={getButtonClass('down')}
           style={{
             width: `${dpadSize.buttonSize}px`,
             height: `${dpadSize.buttonSize}px`
@@ -211,8 +214,8 @@ const DPad = ({
         </button>
 
         {/* Earth button (bottom-left) */}
-        <button
-          className={getButtonClass('earth') + (armedSpell === 'earth' ? ' aim' : '')}
+          <button
+            className={getButtonClass('earth')}
           style={{
             width: `${dpadSize.buttonSize}px`,
             height: `${dpadSize.buttonSize}px`

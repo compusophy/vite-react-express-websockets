@@ -352,6 +352,9 @@ const GameCanvas = ({ gameState, currentPlayerId, onCanvasClick, onCanvasSizeCha
     if (!canvas) return
 
     const ctx = canvas.getContext('2d')
+    // HiDPI: scale drawing to device pixel ratio while keeping CSS size
+    const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) ? window.devicePixelRatio : 1
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     
     // Clear everything
     ctx.clearRect(0, 0, canvasSize.width, canvasSize.height)
@@ -365,10 +368,12 @@ const GameCanvas = ({ gameState, currentPlayerId, onCanvasClick, onCanvasSizeCha
     const stoneCells = []
     const goldCells = []
     const diamondCells = []
+    const harvested = new Set((gameState.harvested || []).map(h => `${h.x},${h.y}`))
     for (let cy = 0; cy < GRID_ROWS; cy++) {
       for (let cx = 0; cx < GRID_COLS; cx++) {
         const idx = cy * GRID_COLS + cx
         const type = resourceMap[idx]
+        if (harvested.has(`${cx},${cy}`)) continue
         if (type === 'wood') woodCells.push({ cx, cy })
         else if (type === 'stone') stoneCells.push({ cx, cy })
         else if (type === 'gold') goldCells.push({ cx, cy })
@@ -495,7 +500,7 @@ const GameCanvas = ({ gameState, currentPlayerId, onCanvasClick, onCanvasSizeCha
         ? 'rgba(66, 165, 245, 0)'
         : isAir
           ? 'rgba(200, 255, 255, 0)'
-          : 'rgba(255, 69, 0, 0)'
+        : 'rgba(255, 69, 0, 0)'
       const coreColor = isFrost
         ? '#2196F3'
         : isAir
@@ -550,10 +555,11 @@ const GameCanvas = ({ gameState, currentPlayerId, onCanvasClick, onCanvasSizeCha
   return (
     <canvas
       ref={canvasRef}
-      width={canvasSize.width}
-      height={canvasSize.height}
+      width={Math.floor(canvasSize.width * (typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1))}
+      height={Math.floor(canvasSize.height * (typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1))}
       onClick={handleClick}
       className="game-canvas"
+      style={{ width: `${canvasSize.width}px`, height: `${canvasSize.height}px` }}
     />
   )
 }
