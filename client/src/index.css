@@ -237,17 +237,20 @@ body {
 .dpad-button.earth {
   grid-column: 1;
   grid-row: 3;
-  background: #3e4a2f;
-  border-color: #2f3a24;
+  /* Neutralize to base d-pad palette (no green) */
+  background: #34495e;
+  border-color: #2c3e50;
 }
 .dpad-button.earth:hover {
-  background: #4c5a39;
-  border-color: #3d4a2d;
+  /* Match generic hover */
+  background: #3b5998;
+  border-color: #2980b9;
 }
 .dpad-button.earth:active,
 .dpad-button.earth.active {
-  background: #6b8e23;
-  border-color: #8fbc8f;
+  /* Match generic active/pressed */
+  background: #3b5998;
+  border-color: #2980b9;
 }
 
 .spell-icon-wrapper {

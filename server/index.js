@@ -43,8 +43,9 @@ let gameState = {
   nextPlayerId: 1,
   blocks: [], // array of { x, y }
   mapSeed: Math.floor(Math.random() * 1e9),
-  projectiles: [], // { id, type, x, y, vx, vy, ownerId }
-  harvested: [] // array of { x, y }
+  // projectiles removed
+  harvested: [], // array of { x, y }
+  spawnedResources: [] // array of { x, y, type }
 };
 
 // Helper function to generate a random color for players
@@ -108,6 +109,12 @@ function createPlayer(playerId, socketId) {
     isActive: true,
     hp: 100,
     inventory: { wood: 0, stone: 0, gold: 0, diamond: 0 },
+    tools: { pickaxe: 'wood', axe: 'wood' },
+    items: [
+      { type: 'pickaxe_wood' },
+      { type: 'hammer' },
+      { type: 'axe_wood' }
+    ],
     skills: {
       mining: { level: 1, xp: 0 },
       woodcutting: { level: 1, xp: 0 }
@@ -122,7 +129,8 @@ function sanitizeLoadedState(loaded) {
     blocks: [],
     mapSeed: Math.floor(Math.random() * 1e9),
     projectiles: [],
-    harvested: []
+    harvested: [],
+    spawnedResources: []
   };
 
   if (loaded && typeof loaded === 'object') {
@@ -143,14 +151,16 @@ function sanitizeLoadedState(loaded) {
     if (Number.isInteger(loaded.mapSeed) && loaded.mapSeed >= 0) {
       sanitized.mapSeed = loaded.mapSeed;
     }
-    if (Array.isArray(loaded.projectiles)) {
-      // do not restore in-flight projectiles across restarts
-      sanitized.projectiles = []
-    }
+    // drop legacy projectiles
     if (Array.isArray(loaded.harvested)) {
       sanitized.harvested = loaded.harvested
         .filter(h => h && Number.isInteger(h.x) && Number.isInteger(h.y))
         .map(h => ({ x: Math.max(0, Math.min(23, h.x)), y: Math.max(0, Math.min(23, h.y)) }))
+    }
+    if (Array.isArray(loaded.spawnedResources)) {
+      sanitized.spawnedResources = loaded.spawnedResources
+        .filter(s => s && Number.isInteger(s.x) && Number.isInteger(s.y) && typeof s.type === 'string')
+        .map(s => ({ x: Math.max(0, Math.min(23, s.x)), y: Math.max(0, Math.min(23, s.y)), type: s.type }))
     }
   }
 
@@ -175,6 +185,15 @@ function sanitizeLoadedState(loaded) {
       p.inventory.stone = Number(p.inventory.stone) || 0
       p.inventory.gold = Number(p.inventory.gold) || 0
       p.inventory.diamond = Number(p.inventory.diamond) || 0
+    }
+    if (!p.tools || typeof p.tools !== 'object') {
+      p.tools = { pickaxe: 'wood', axe: 'wood' }
+    }
+    if (!Array.isArray(p.items)) {
+      p.items = [{ type: 'pickaxe_wood' }, { type: 'hammer' }]
+    } else {
+      // cap to 9 slots
+      p.items = p.items.slice(0, 9)
     }
     if (!p.skills || typeof p.skills !== 'object') {
       p.skills = {
@@ -240,6 +259,10 @@ function getCellType(x, y, seed) {
   if (x < 0 || x >= GRID_COLS || y < 0 || y >= GRID_ROWS) return 'open';
   const types = buildResourceTypes(seed);
   const idx = y * GRID_COLS + x;
+  // Dynamic overrides: harvested removes resource; spawnedResources adds resource
+  if ((gameState.harvested || []).some(h => h.x === x && h.y === y)) return 'open'
+  const spawn = (gameState.spawnedResources || []).find(s => s.x === x && s.y === y)
+  if (spawn && typeof spawn.type === 'string') return spawn.type
   return types[idx] || 'open';
 }
 
@@ -348,6 +371,12 @@ io.on('connection', (socket) => {
       socket.emit('player_position', { playerId: player.id, x: player.x, y: player.y });
       return;
     }
+    // Simple per-action cooldown (shared across actions)
+    const now = Date.now();
+    if (typeof player._lastActionAt === 'number' && now - player._lastActionAt < 950) {
+      socket.emit('player_position', { playerId: player.id, x: player.x, y: player.y });
+      return;
+    }
 
     // Validate and clamp
     const targetX = Math.max(0, Math.min(23, Math.floor(Number(x))));
@@ -384,17 +413,20 @@ io.on('connection', (socket) => {
     // Accept move
     player.x = targetX;
     player.y = targetY;
+    player._lastActionAt = now;
 
     io.emit('player_moved', { playerId: player.id, x: targetX, y: targetY });
     socket.emit('player_position', { playerId: player.id, x: targetX, y: targetY });
     console.log(`Player ${player.name} moved to cell (${targetX}, ${targetY})`);
   });
 
-  // Handle block placement or removal (toggle)
+  // Handle build placement/removal (hammer): supports 'wall' and 'workbench'
   socket.on('place_block', (data) => {
     const acting = Object.values(gameState.players).find(p => p.socketId === socket.id)
     if (!acting || !acting.isActive || (typeof acting.hp === 'number' && acting.hp <= 0)) return
-    const { x, y } = data || {}
+    const now = Date.now();
+    if (typeof acting._lastActionAt === 'number' && now - acting._lastActionAt < 950) return
+    const { x, y, type } = data || {}
     if (typeof x !== 'number' || typeof y !== 'number') return
     // clamp to grid 0..23
     const cx = Math.max(0, Math.min(23, Math.floor(x)))
@@ -410,6 +442,7 @@ io.on('connection', (socket) => {
       gameState.blocks = gameState.blocks.filter(b => !(b.x === cx && b.y === cy))
       io.emit('block_removed', { x: cx, y: cy })
       console.log(`Block removed at (${cx}, ${cy})`)
+      acting._lastActionAt = now
       saveGameState()
       return
     }
@@ -419,13 +452,37 @@ io.on('connection', (socket) => {
       return
     }
     const cellType = getCellType(cx, cy, gameState.mapSeed)
-    if (cellType !== 'open') {
+    const wasHarvested = (gameState.harvested || []).some(h => h.x === cx && h.y === cy)
+    if (!wasHarvested && cellType !== 'open') {
       console.log(`Reject block at (${cx}, ${cy}) - resource cell: ${cellType}`)
       return
     }
-    gameState.blocks.push({ x: cx, y: cy })
-    io.emit('block_added', { x: cx, y: cy })
-    console.log(`Block placed at (${cx}, ${cy})`)
+    // Enforce simple costs for structures
+    const inv = acting.inventory || { wood: 0, stone: 0, gold: 0 }
+    let placed = null
+    if (type === 'workbench') {
+      const cost = { wood: 10, stone: 5 }
+      if (inv.wood < cost.wood || inv.stone < cost.stone) {
+        console.log(`Reject build at (${cx}, ${cy}) - insufficient materials for workbench`)
+        return
+      }
+      inv.wood -= cost.wood
+      inv.stone -= cost.stone
+      placed = { x: cx, y: cy, type: 'workbench' }
+    } else {
+      // Wall can be built from 4 wood or 4 stone
+      let material = null
+      if (inv.wood >= 4) { inv.wood -= 4; material = 'wood' }
+      else if (inv.stone >= 4) { inv.stone -= 4; material = 'stone' }
+      else { console.log(`Reject build at (${cx}, ${cy}) - insufficient materials for wall`); return }
+      placed = { x: cx, y: cy, type: 'wall', material }
+    }
+    acting.inventory = inv
+    gameState.blocks.push(placed)
+    io.emit('block_added', placed)
+    console.log(`Block placed at (${cx}, ${cy}) type=${placed.type}`)
+    io.emit('inventory_update', { playerId: acting.id, inventory: inv })
+    acting._lastActionAt = now
     saveGameState()
   })
 
@@ -433,7 +490,9 @@ io.on('connection', (socket) => {
   socket.on('harvest', (data) => {
     const actor = Object.values(gameState.players).find(p => p.socketId === socket.id)
     if (!actor || !actor.isActive || (typeof actor.hp === 'number' && actor.hp <= 0)) return
-    const { x, y } = data || {}
+    const now = Date.now();
+    if (typeof actor._lastActionAt === 'number' && now - actor._lastActionAt < 950) return
+    const { x, y, tool } = data || {}
     if (!Number.isInteger(x) || !Number.isInteger(y)) return
     if (x < 0 || x > 23 || y < 0 || y > 23) return
     // Must be adjacent (4-dir) only
@@ -446,7 +505,21 @@ io.on('connection', (socket) => {
     // Disallow harvesting if another active player stands on the cell
     const occupied = Object.values(gameState.players).some(p => p.isActive && p.x === x && p.y === y)
     if (occupied) return
-    // Update inventory and mark harvested; grant skill XP
+    // Tool gating: require axe for wood; pickaxe for stone/gold/diamond; gold requires stone+ pickaxe
+    const pickaxeTier = actor.tools?.pickaxe || 'wood'
+    const axeTier = actor.tools?.axe || 'wood'
+    if (type === 'wood') {
+      if (tool !== 'axe') { console.log('Reject harvest: wood requires axe'); return }
+      // axe tier gating can be added later
+    } else {
+      if (tool !== 'pickaxe') { console.log('Reject harvest: ore requires pickaxe'); return }
+      if (type === 'gold' && (pickaxeTier !== 'stone' && pickaxeTier !== 'gold')) {
+        console.log('Reject harvest: insufficient pickaxe tier for gold')
+        return
+      }
+      // optional: diamond tier gating later
+    }
+    // Update inventory and mark harvested; grant skill XP and apply skill bonus yield
     actor.inventory = actor.inventory || { wood: 0, stone: 0, gold: 0, diamond: 0 }
     actor.skills = actor.skills || { mining: { level: 1, xp: 0 }, woodcutting: { level: 1, xp: 0 } }
     const grantXp = (skillKey, amount) => {
@@ -459,12 +532,50 @@ io.on('connection', (socket) => {
       }
       actor.skills[skillKey] = skill
     }
-    if (type === 'wood') { actor.inventory.wood += 1; grantXp('woodcutting', 10) }
-    else if (type === 'stone') { actor.inventory.stone += 1; grantXp('mining', 12) }
-    else if (type === 'gold') { actor.inventory.gold += 1; grantXp('mining', 20) }
-    else if (type === 'diamond') { actor.inventory.diamond += 1; grantXp('mining', 35) }
+    const getBonus = (skill) => {
+      // +1 material per 5 levels (e.g., lvl 1-4:0, 5-9:+1, 10-14:+2 ...)
+      return Math.max(0, Math.floor((skill?.level || 1) / 5))
+    }
+    if (type === 'wood') {
+      const bonus = getBonus(actor.skills.woodcutting)
+      actor.inventory.wood += 1 + bonus
+      grantXp('woodcutting', 10)
+    } else if (type === 'stone') {
+      const bonus = getBonus(actor.skills.mining)
+      actor.inventory.stone += 1 + bonus
+      grantXp('mining', 12)
+    } else if (type === 'gold') {
+      const bonus = getBonus(actor.skills.mining)
+      actor.inventory.gold += 1 + Math.min(1, bonus) // gold scales slower
+      grantXp('mining', 20)
+    } else if (type === 'diamond') {
+      const bonus = getBonus(actor.skills.mining)
+      actor.inventory.diamond += 1 + Math.min(1, bonus)
+      grantXp('mining', 35)
+    }
     gameState.harvested.push({ x, y })
+    // Spawn a new resource of the same type at a random open tile
+    const candidates = []
+    for (let ty = 0; ty < GRID_ROWS; ty++) {
+      for (let tx = 0; tx < GRID_COLS; tx++) {
+        // Skip original location
+        if (tx === x && ty === y) continue
+        // Must be open currently
+        if (getCellType(tx, ty, gameState.mapSeed) !== 'open') continue
+        // No earth block
+        if ((gameState.blocks || []).some(b => b.x === tx && b.y === ty)) continue
+        // No player occupying
+        if (Object.values(gameState.players).some(p => p.isActive && p.x === tx && p.y === ty)) continue
+        candidates.push({ x: tx, y: ty })
+      }
+    }
+    if (candidates.length > 0) {
+      const pick = candidates[Math.floor(Math.random() * candidates.length)]
+      gameState.spawnedResources.push({ x: pick.x, y: pick.y, type })
+      io.emit('resource_spawned', { x: pick.x, y: pick.y, type })
+    }
     io.emit('harvested', { x, y, type, playerId: actor.id, inventory: actor.inventory, skills: actor.skills })
+    actor._lastActionAt = now
     saveGameState()
   })
 
@@ -481,72 +592,7 @@ io.on('connection', (socket) => {
     saveGameState()
   })
 
-  // Handle projectile spawn (server-authoritative collision and damage)
-  socket.on('projectile_spawn', (data) => {
-    const acting = Object.values(gameState.players).find(p => p.socketId === socket.id)
-    if (!acting || !acting.isActive || (typeof acting.hp === 'number' && acting.hp <= 0)) return
-    const { id, type, x, y, vx, vy, ownerId } = data || {}
-    if (type !== 'fireball') return
-    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(vx) || !Number.isFinite(vy)) return
-    const speed = Math.hypot(vx, vy)
-    if (speed <= 0) return
-
-    const projectile = { id: String(id || `${Date.now()}-${Math.random()}`), type, x, y, vx, vy, ownerId }
-    gameState.projectiles.push(projectile)
-
-    // Broadcast spawn so other clients can render immediately
-    io.emit('projectile_spawn', projectile)
-
-    // Simulate movement in small steps server-side until collision, but emit at time-of-impact
-    const maxSimTime = 60 // allow full-map range at typical speeds
-    const step = 1 / 60 // 60 Hz
-    let elapsed = 0
-    let alive = true
-    let hitPlayerId = null
-    let finalX = projectile.x
-    let finalY = projectile.y
-    while (alive && elapsed < maxSimTime) {
-      // advance
-      finalX += projectile.vx * step
-      finalY += projectile.vy * step
-      elapsed += step
-
-      // cell coords
-      const cx = Math.floor(finalX)
-      const cy = Math.floor(finalY)
-      if (cx < 0 || cx > 23 || cy < 0 || cy > 23) { alive = false; break }
-
-      // collision: earth blocks
-      if ((gameState.blocks || []).some(b => b.x === cx && b.y === cy)) { alive = false; break }
-
-      // collision: resource
-      const cellType = getCellType(cx, cy, gameState.mapSeed)
-      if (cellType && cellType !== 'open') { alive = false; break }
-
-      // collision: player unit (excluding owner)
-      const target = Object.values(gameState.players).find(p => p.isActive && p.id !== ownerId && p.x === cx && p.y === cy)
-      if (target) {
-        hitPlayerId = target.id
-        alive = false
-        break
-      }
-    }
-
-    const delayMs = Math.max(0, Math.floor(elapsed * 1000))
-    setTimeout(() => {
-      if (hitPlayerId) {
-        const target = gameState.players[hitPlayerId]
-        if (target) {
-          target.hp = 0
-          target.isActive = false
-          io.emit('player_hit', { playerId: target.id, hp: target.hp, by: ownerId })
-          io.emit('player_died', { playerId: target.id, by: ownerId })
-        }
-      }
-      gameState.projectiles = gameState.projectiles.filter(p => p.id !== projectile.id)
-      io.emit('projectile_stop', { id: projectile.id, x: finalX, y: finalY })
-    }, delayMs)
-  })
+  // Projectiles removed
 
   // Handle reset of all blocks (earth walls)
   socket.on('reset_blocks', () => {

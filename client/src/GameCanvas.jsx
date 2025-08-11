@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState, useMemo } from 'react'
 
-const GameCanvas = ({ gameState, currentPlayerId, onCanvasClick, onCanvasSizeChange, projectiles = [], mapSeed = 1337 }) => {
+const GameCanvas = ({ gameState, currentPlayerId, onCanvasClick, onCanvasSizeChange, mapSeed = 1337 }) => {
   const canvasRef = useRef(null)
   const [canvasSize, setCanvasSize] = useState({ width: 600, height: 600 })
   
@@ -372,8 +372,13 @@ const GameCanvas = ({ gameState, currentPlayerId, onCanvasClick, onCanvasSizeCha
     for (let cy = 0; cy < GRID_ROWS; cy++) {
       for (let cx = 0; cx < GRID_COLS; cx++) {
         const idx = cy * GRID_COLS + cx
-        const type = resourceMap[idx]
+        // Start from base type
+        let type = resourceMap[idx]
+        // Skip harvested base resources
         if (harvested.has(`${cx},${cy}`)) continue
+        // Draw dynamically spawned resources (server-driven) on top of base map
+        const dynamic = (gameState.spawnedResources || []).find(s => s.x === cx && s.y === cy)
+        if (dynamic && dynamic.type) type = dynamic.type
         if (type === 'wood') woodCells.push({ cx, cy })
         else if (type === 'stone') stoneCells.push({ cx, cy })
         else if (type === 'gold') goldCells.push({ cx, cy })
@@ -400,17 +405,31 @@ const GameCanvas = ({ gameState, currentPlayerId, onCanvasClick, onCanvasSizeCha
       const pixelX = b.x * GRID_SIZE + (GRID_SIZE / 2)
       const pixelY = b.y * GRID_SIZE + (GRID_SIZE / 2)
       const size = Math.max(12, Math.min(18, GRID_SIZE * 0.8))
-      ctx.fillStyle = '#6b5f3b'
-      ctx.strokeStyle = '#3f3a26'
-      ctx.lineWidth = 1
-      ctx.beginPath()
-      ctx.rect(pixelX - size/2, pixelY - size/2, size, size)
-      ctx.fill()
-      ctx.stroke()
-      ctx.fillStyle = 'rgba(255,255,255,0.06)'
-      ctx.fillRect(pixelX - size/2, pixelY - size/2, size, size * 0.35)
-      ctx.fillStyle = 'rgba(0,0,0,0.08)'
-      ctx.fillRect(pixelX - size/2, pixelY + size*0.15, size, size * 0.35)
+      if (b.type === 'workbench') {
+        // Simple workbench icon
+        ctx.fillStyle = '#6b4f2a'
+        ctx.strokeStyle = '#3d311b'
+        ctx.lineWidth = 1
+        ctx.beginPath()
+        ctx.rect(pixelX - size/2, pixelY - size/3, size, size/3)
+        ctx.fill(); ctx.stroke()
+        // legs
+        ctx.fillRect(pixelX - size/2 + 2, pixelY, 3, size/3)
+        ctx.fillRect(pixelX + size/2 - 5, pixelY, 3, size/3)
+      } else {
+        // Wall block
+        ctx.fillStyle = '#6b5f3b'
+        ctx.strokeStyle = '#3f3a26'
+        ctx.lineWidth = 1
+        ctx.beginPath()
+        ctx.rect(pixelX - size/2, pixelY - size/2, size, size)
+        ctx.fill()
+        ctx.stroke()
+        ctx.fillStyle = 'rgba(255,255,255,0.06)'
+        ctx.fillRect(pixelX - size/2, pixelY - size/2, size, size * 0.35)
+        ctx.fillStyle = 'rgba(0,0,0,0.08)'
+        ctx.fillRect(pixelX - size/2, pixelY + size*0.15, size, size * 0.35)
+      }
     })
 
     // Draw resource icons (no thinning)
@@ -465,65 +484,9 @@ const GameCanvas = ({ gameState, currentPlayerId, onCanvasClick, onCanvasSizeCha
         }
       })
 
-    // Draw projectiles (fireballs/frostbolts) with same style; only color differs
-    projectiles.forEach(p => {
-      const pixelX = p.x * GRID_SIZE
-      const pixelY = p.y * GRID_SIZE
-      if (p.type === 'earth') {
-        const size = Math.max(12, Math.min(18, GRID_SIZE * 0.8))
-        // Block body
-        ctx.fillStyle = '#6b5f3b'
-        ctx.strokeStyle = '#3f3a26'
-        ctx.lineWidth = 1
-        ctx.beginPath()
-        ctx.rect(pixelX - size/2, pixelY - size/2, size, size)
-        ctx.fill()
-        ctx.stroke()
-        // Top highlight
-        ctx.fillStyle = 'rgba(255,255,255,0.06)'
-        ctx.fillRect(pixelX - size/2, pixelY - size/2, size, size * 0.35)
-        // Bottom shadow
-        ctx.fillStyle = 'rgba(0,0,0,0.08)'
-        ctx.fillRect(pixelX - size/2, pixelY + size*0.15, size, size * 0.35)
-        return
-      }
-      const outerRadius = Math.max(4, Math.min(10, GRID_SIZE * 0.3))
-
-      const isFrost = p.type === 'frostbolt'
-      const isAir = p.type === 'air'
-      const glowInner = isFrost
-        ? 'rgba(66, 165, 245, 0.9)'
-        : isAir
-          ? 'rgba(200, 255, 255, 0.7)'
-          : 'rgba(255, 140, 0, 0.85)'
-      const glowOuter = isFrost
-        ? 'rgba(66, 165, 245, 0)'
-        : isAir
-          ? 'rgba(200, 255, 255, 0)'
-        : 'rgba(255, 69, 0, 0)'
-      const coreColor = isFrost
-        ? '#2196F3'
-        : isAir
-          ? '#D7FFFF'
-          : '#FF6B00'
-
-      // Outer glow
-      const gradient = ctx.createRadialGradient(pixelX, pixelY, 0, pixelX, pixelY, outerRadius)
-      gradient.addColorStop(0, glowInner)
-      gradient.addColorStop(1, glowOuter)
-      ctx.fillStyle = gradient
-      ctx.beginPath()
-      ctx.arc(pixelX, pixelY, outerRadius, 0, 2 * Math.PI)
-      ctx.fill()
-
-      // Core
-      ctx.fillStyle = coreColor
-      ctx.beginPath()
-      ctx.arc(pixelX, pixelY, Math.max(2, outerRadius * 0.35), 0, 2 * Math.PI)
-      ctx.fill()
-    })
+    // Projectiles removed
     
-  }, [gameState, currentPlayerId, canvasSize, GRID_SIZE, projectiles, iconVersion])
+  }, [gameState, currentPlayerId, canvasSize, GRID_SIZE, iconVersion])
 
   const handleClick = (event) => {
     const canvas = canvasRef.current

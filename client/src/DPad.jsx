@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react'
-import { ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Flame, Droplet, Pickaxe, Mountain, Wind } from 'lucide-react'
+import { ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Pickaxe, Hammer, Axe } from 'lucide-react'
 
 const DPad = ({ 
   onMove, 
@@ -15,8 +15,12 @@ const DPad = ({
   armedSpell = null,
   allowedDirections = null,
   onPickaxe,
+  onAxe,
   harvestArmed = false,
+  harvestTool = 'pickaxe',
   canUsePickaxe = true,
+  canUseAxe = true,
+  inventory = { wood: 0, stone: 0, gold: 0, diamond: 0 }
 }) => {
   const [dpadSize, setDpadSize] = useState({ buttonSize: 40, iconSize: 24 })
 
@@ -67,12 +71,81 @@ const DPad = ({
   const getButtonClass = (direction) => {
     const baseClass = 'dpad-button'
     const isArrow = direction === 'up' || direction === 'down' || direction === 'left' || direction === 'right'
-    const allowed = isArrow && allowedDirections ? !!allowedDirections[direction] : true
+    let allowed = true
+    if (isArrow && allowedDirections) {
+      if (harvestArmed) {
+        if (harvestTool === 'axe') allowed = !!allowedDirections?.wood?.[direction]
+        else allowed = !!allowedDirections?.ore?.[direction]
+      } else {
+        allowed = !!allowedDirections[direction]
+      }
+    }
     const isCenter = direction === 'center'
-    const isDisabled = isArrow ? !allowed : (isCenter ? !canUsePickaxe : false)
+    const isDisabled = isArrow ? !allowed : false
     const disabledClass = isDisabled ? ' disabled' : ''
-    const activeClass = (direction === 'earth' && armedSpell === 'earth') || (direction === 'center' && harvestArmed) ? ' aim' : ''
+    const activeClass = (direction === 'earth' && armedSpell === 'earth') ? ' aim' : ''
     return `${baseClass} ${direction}${disabledClass}${activeClass}`
+  }
+
+  const InventoryGrid = ({ inv, items = [] }) => {
+    const btn = dpadSize.buttonSize
+    const cellPx = Math.max(16, Math.floor(btn / 3))
+    const iconPx = Math.max(12, Math.floor(cellPx * 0.6))
+
+    const TreeIcon = ({ size = iconPx }) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path d="M12 3 L7 10 H17 Z" fill="#7aa267" />
+        <path d="M12 7 L6 15 H18 Z" fill="#7aa267" />
+        <rect x="11" y="15" width="2" height="6" rx="1" fill="#7aa267" />
+      </svg>
+    )
+    const StoneIcon = ({ size = iconPx }) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path d="M6 17 L9 9 L14 7 L18 12 L16 17 L8 19 Z" fill="#9aa3ad" stroke="#6e7781" strokeWidth="1.5" strokeLinejoin="round"/>
+        <path d="M10 10 L13 9 L15 12 L12 13 Z" fill="#b8c0c8" opacity="0.7"/>
+      </svg>
+    )
+    const GoldIcon = ({ size = iconPx }) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path d="M6 14 L9 10 H15 L18 14 Z" fill="#e2c35b"/>
+        <rect x="5" y="14" width="14" height="6" rx="1.5" fill="#d2b055"/>
+        <path d="M5 14 H19" stroke="#a58833" strokeWidth="1" opacity="0.6"/>
+        <path d="M6 14 L9 10 H15 L18 14" stroke="#a58833" strokeWidth="1" opacity="0.6"/>
+        <path d="M7 16 H17" stroke="#f6e08a" strokeWidth="1" opacity="0.35"/>
+      </svg>
+    )
+    const DiamondIcon = ({ size = iconPx }) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path d="M12 3 L20 12 L12 21 L4 12 Z" fill="#7dd3fc"/>
+        <path d="M12 3 L16 12 L12 21 L8 12 Z" fill="#c3f0ff" opacity="0.5"/>
+        <path d="M12 3 L20 12 L16 12 Z" fill="#5bb8d6" opacity="0.4"/>
+      </svg>
+    )
+
+    // Map items to icons; fallback to resource icons for now
+    const renderItem = (it) => {
+      if (!it) return null
+      const iconSize = iconPx
+      if (it.type?.startsWith('pickaxe')) return <Pickaxe size={iconSize} strokeWidth={3} />
+      if (it.type === 'hammer') return <Hammer size={iconSize} strokeWidth={3} />
+      if (it.type?.startsWith('axe')) return <Axe size={iconSize} strokeWidth={3} />
+      if (it.type === 'wood') return <TreeIcon />
+      if (it.type === 'stone') return <StoneIcon />
+      if (it.type === 'gold') return <GoldIcon />
+      return null
+    }
+    const slots = new Array(9).fill(null).map((_, i) => items[i] || null)
+    return (
+      <div style={{ width: '100%', height: '100%', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gridTemplateRows: 'repeat(3, 1fr)', gap: 2, boxSizing: 'border-box', padding: 2 }}>
+        {slots.map((it, idx) => (
+          <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#141414', border: '1px solid rgba(255,255,255,0.08)', boxSizing: 'border-box' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '80%', height: '80%', background: '#0c0c0c', border: '1px solid rgba(255,255,255,0.06)' }}>
+              {renderItem(it)}
+            </div>
+          </div>
+        ))}
+      </div>
+    )
   }
 
   return (
@@ -88,19 +161,22 @@ const DPad = ({
         { /* We'll add the 'await-direction' class when armedSpell is set */ }
         { /* Compute once for readability */ }
         { /* Note: We keep aim glow only when a spell is armed */ }
-        {/* Spell button (top-left) */}
+        {/* Pickaxe tool (top-left) */}
         <button
-          className={getButtonClass('spell') + (armedSpell === 'fire' ? ' aim' : '')}
+          className={getButtonClass('pickaxe') + (harvestArmed && harvestTool === 'pickaxe' ? ' aim' : '')}
           style={{
             width: `${dpadSize.buttonSize}px`,
             height: `${dpadSize.buttonSize}px`
           }}
-          onPointerDown={handleSpellPress}
+          onPointerDown={() => {
+            if (!canUsePickaxe) return
+            if (onPickaxe) onPickaxe()
+          }}
           onPointerUp={(e) => e.currentTarget.blur()}
-          aria-label="Cast Spell"
+          aria-label="Pickaxe"
         >
           <div className="spell-icon-wrapper">
-            <Flame size={dpadSize.iconSize} strokeWidth={3} />
+            <Pickaxe size={dpadSize.iconSize} strokeWidth={3} />
             {cooldownFraction > 0 && (
               <div 
                 className="cooldown-overlay"
@@ -124,19 +200,22 @@ const DPad = ({
           <ChevronUp size={dpadSize.iconSize} strokeWidth={3} />
         </button>
 
-        {/* Frost button (top-right) */}
+        {/* Axe (top-right) */}
         <button
-          className={getButtonClass('frost') + (armedSpell === 'water' ? ' aim' : '')}
+          className={getButtonClass('axe') + (harvestArmed && harvestTool === 'axe' ? ' aim' : '')}
           style={{
             width: `${dpadSize.buttonSize}px`,
             height: `${dpadSize.buttonSize}px`
           }}
-          onPointerDown={handleFrostPress}
+          onPointerDown={() => {
+            if (!canUseAxe) return
+            if (onAxe) onAxe()
+          }}
           onPointerUp={(e) => e.currentTarget.blur()}
-          aria-label="Cast Frostbolt"
+          aria-label="Axe"
         >
           <div className="spell-icon-wrapper">
-            <Droplet size={dpadSize.iconSize} strokeWidth={3} />
+            <Axe size={dpadSize.iconSize} strokeWidth={3} />
             {cooldownFraction > 0 && (
               <div 
                 className="cooldown-overlay"
@@ -167,24 +246,11 @@ const DPad = ({
               width: `${dpadSize.buttonSize}px`,
               height: `${dpadSize.buttonSize}px`
             }}
-            onPointerDown={() => {
-              if (!canUsePickaxe) return
-              if (onPickaxe) onPickaxe()
-              else if (onStop) onStop()
-            }}
+            onPointerDown={(e) => { /* center is neutral now */ }}
             onPointerUp={clearFocus}
-            aria-label="Pickaxe / Harvest"
+            aria-label="Neutral"
           >
-            <div className="spell-icon-wrapper">
-              <Pickaxe size={dpadSize.iconSize} strokeWidth={3} />
-              {cooldownFraction > 0 && (
-                <div 
-                  className="cooldown-overlay"
-                  style={{ height: `${cooldownFraction * 100}%` }}
-                  aria-hidden="true"
-                />
-              )}
-            </div>
+            <div className="spell-icon-wrapper" />
           </button>
           
           <button
@@ -213,7 +279,7 @@ const DPad = ({
           <ChevronDown size={dpadSize.iconSize} strokeWidth={3} />
         </button>
 
-        {/* Earth button (bottom-left) */}
+        {/* Build/Hammer button (bottom-left) */}
           <button
             className={getButtonClass('earth')}
           style={{
@@ -222,10 +288,10 @@ const DPad = ({
           }}
           onPointerDown={handleEarthPress}
           onPointerUp={(e) => e.currentTarget.blur()}
-          aria-label="Place Earth Block"
+          aria-label="Build / Hammer"
         >
           <div className="spell-icon-wrapper">
-            <Mountain size={dpadSize.iconSize} strokeWidth={3} />
+            <Hammer size={dpadSize.iconSize} strokeWidth={3} />
             {cooldownFraction > 0 && (
               <div 
                 className="cooldown-overlay"
@@ -236,26 +302,18 @@ const DPad = ({
           </div>
         </button>
 
-        {/* Air button (bottom-right) */}
+        {/* Inventory display (bottom-right) */}
         <button
-          className={getButtonClass('air') + (armedSpell === 'air' ? ' aim' : '')}
+          className={getButtonClass('air')}
           style={{
             width: `${dpadSize.buttonSize}px`,
-            height: `${dpadSize.buttonSize}px`
+            height: `${dpadSize.buttonSize}px`,
+            padding: 0
           }}
-          onPointerDown={() => onArmAir && onArmAir()}
-          onPointerUp={(e) => e.currentTarget.blur()}
-          aria-label="Cast Air"
+          aria-label="Inventory"
         >
-          <div className="spell-icon-wrapper">
-            <Wind size={dpadSize.iconSize} strokeWidth={3} />
-            {cooldownFraction > 0 && (
-              <div 
-                className="cooldown-overlay"
-                style={{ height: `${cooldownFraction * 100}%` }}
-                aria-hidden="true"
-              />
-            )}
+          <div style={{ width: '100%', height: '100%' }}>
+            <InventoryGrid inv={inventory} items={inventory?.items || []} />
           </div>
         </button>
       </div>
