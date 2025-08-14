@@ -287,6 +287,10 @@ const GameCanvas = ({ gameState, currentPlayerId, onCanvasClick, onCanvasSizeCha
     for (let k = 0; k < goldCount && idx + k < total; k++) types[indices[idx + k]] = 'gold'
     idx += goldCount
     for (let k = 0; k < diamondCount && idx + k < total; k++) types[indices[idx + k]] = 'diamond'
+    // Promote some wood to 'oak'
+    for (let i = 0; i < total; i++) {
+      if (types[i] === 'wood' && rng() < 0.2) types[i] = 'oak'
+    }
     return types
   }, [GRID_COLS, GRID_ROWS, MAP_SEED])
 
@@ -365,6 +369,7 @@ const GameCanvas = ({ gameState, currentPlayerId, onCanvasClick, onCanvasSizeCha
 
     // Resource cells (icons only; no background fills) from precomputed map
     const woodCells = []
+    const oakCells = []
     const stoneCells = []
     const goldCells = []
     const diamondCells = []
@@ -380,6 +385,7 @@ const GameCanvas = ({ gameState, currentPlayerId, onCanvasClick, onCanvasSizeCha
         const dynamic = (gameState.spawnedResources || []).find(s => s.x === cx && s.y === cy)
         if (dynamic && dynamic.type) type = dynamic.type
         if (type === 'wood') woodCells.push({ cx, cy })
+        else if (type === 'oak') oakCells.push({ cx, cy })
         else if (type === 'stone') stoneCells.push({ cx, cy })
         else if (type === 'gold') goldCells.push({ cx, cy })
         else if (type === 'diamond') diamondCells.push({ cx, cy })
@@ -446,6 +452,7 @@ const GameCanvas = ({ gameState, currentPlayerId, onCanvasClick, onCanvasSizeCha
     }
 
     drawIconSet(woodCells, getTreeIconImage, '#7aa267', 0.7)
+    drawIconSet(oakCells, getTreeIconImage, '#5c8f4e', 0.7)
     drawIconSet(stoneCells, getStoneIconImage, '#9aa3ad', 0.7)
     drawIconSet(goldCells, getGoldIconImage, '#d2b055', 0.7)
     drawIconSet(diamondCells, getDiamondIconImage, '#7dd3fc', 0.7)

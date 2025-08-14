@@ -1,0 +1,39 @@
+NWN Web RTS – LLM Reference Context
+
+This file is a concise, single-source summary for coding LLM agents. Keep it synchronized with SPECIFICATION.md.
+
+Core Principles:
+- Minimal UI, mobile-first: DPad with center Smart Interact button.
+- Deterministic map via seed; server authoritative, client mirrors for UX.
+- Global per-action cooldown; client mirrors for feedback.
+- Skills (woodcutting, mining, building) with level*100 XP to next level.
+
+Key Features:
+- Resources: open, wood, oak, stone, gold, diamond. Oak is a rarer wood variant with higher yield/XP.
+- Harvesting: adjacent only; axe for wood/oak; pickaxe for ore; gold requires ≥ stone pickaxe.
+- Building: walls (4 wood or 4 stone), workbench (10 wood + 5 stone). Building grants XP (wall +8, workbench +20).
+- Crafting (Workbench): pickaxe→stone (12 stone, Mining≥2), pickaxe→gold (8 gold + 20 stone, Mining≥6), axe→stone (10 stone, Woodcutting≥2).
+- Trading: proximity ≤3, offers + ready + confirm. Server revalidates inventory at confirmation.
+
+Networking (Socket.IO):
+- Client→Server: player_move, place_block, harvest, craft, trade_request, trade_accept, trade_decline, trade_offer, trade_ready, trade_confirm, trade_cancel, set_map_seed, reset_blocks, player_respawn
+- Server→Client: welcome, player_joined, player_reactivated, player_left, player_moved, player_position, block_added, block_removed, blocks_reset, harvested, resource_spawned, inventory_update, tools_update, map_seed, trade_invite, trade_declined, trade_open, trade_update, trade_complete, trade_cancelled, player_died, player_respawned
+
+UI/UX Conventions:
+- Center button: Lucide SquareMousePointer. Smart Interact order: trade → craft → harvest → build → move.
+- Skill rings: Axe=green, Pickaxe=blue, Hammer=amber. Small Lv badge; short pulse on XP gain.
+
+Design Tenets:
+- Keep icons and visual language consistent (Lucide).
+- Prefer small, composable React components with explicit props.
+- Maintain server authority; avoid client-only state that desyncs gameplay.
+
+Sync Rules:
+- On any state-affecting event (harvest, build, craft, trade), server emits updated inventory/skills/tools to all clients.
+
+Extensibility Hints:
+- Add new resources by extending the generator and harvest gating + XP table.
+- Add new crafting by extending the craft handler with costs and skill checks.
+- Add new buildings by extending place_block validation and costs, and building XP values.
+
+Keep this file short and high-signal. For narrative details, see SPECIFICATION.md.

@@ -26,6 +26,14 @@ function App() {
   const [showInventory, setShowInventory] = useState(false)
   // Removed top toast in favor of the death modal only
   const [toast, setToast] = useState(null)
+  // Trading UI state
+  const [isPickingTradePartner, setIsPickingTradePartner] = useState(false)
+  const [pendingTradeInvite, setPendingTradeInvite] = useState(null) // { fromId, fromName }
+  const [tradeSession, setTradeSession] = useState(null) // { aId, bId, partnerId, partnerName, offers, ready, confirmed }
+  const [isCraftingOpen, setIsCraftingOpen] = useState(false)
+  const [woodXpPulse, setWoodXpPulse] = useState(false)
+  const [miningXpPulse, setMiningXpPulse] = useState(false)
+  const [buildingXpPulse, setBuildingXpPulse] = useState(false)
   const isMeDead = useMemo(() => {
     if (!currentPlayerId) return false
     const me = gameState.players[currentPlayerId]
@@ -273,6 +281,9 @@ function App() {
         if (exists) return prev
         return { ...prev, blocks: [...(prev.blocks || []), { x, y, type: type || 'wall', material }] }
       })
+      // Pulse building on my builds
+      const me = Object.values(gameState.players || {}).find(p => p.id === currentPlayerId)
+      if (me) { setBuildingXpPulse(true); setTimeout(() => setBuildingXpPulse(false), 600) }
     })
 
     newSocket.on('block_removed', (data) => {
@@ -287,6 +298,14 @@ function App() {
       setGameState(prev => {
         const players = { ...prev.players }
         if (players[playerId]) players[playerId].inventory = inventory
+        return { ...prev, players }
+      })
+    })
+
+    newSocket.on('skills_update', ({ playerId, skills }) => {
+      setGameState(prev => {
+        const players = { ...prev.players }
+        if (players[playerId]) players[playerId].skills = skills
         return { ...prev, players }
       })
     })
@@ -312,6 +331,13 @@ function App() {
             : prev.players[playerId]
         }
       }))
+      if (playerId === currentPlayerId) {
+        if (type === 'wood' || type === 'oak') {
+          setWoodXpPulse(true); setTimeout(() => setWoodXpPulse(false), 600)
+        } else if (type === 'stone' || type === 'gold' || type === 'diamond') {
+          setMiningXpPulse(true); setTimeout(() => setMiningXpPulse(false), 600)
+        }
+      }
     })
 
     newSocket.on('resource_spawned', ({ x, y, type }) => {
@@ -346,6 +372,129 @@ function App() {
       newSocket.close()
     }
   }, [])
+
+  // Socket listeners for trading
+  useEffect(() => {
+    if (!socket) return
+    const onInvite = ({ fromId, fromName }) => {
+      setPendingTradeInvite({ fromId, fromName })
+    }
+    const onDeclined = ({ byId, byName }) => {
+      setToast({ type: 'info', text: `${byName || 'Player'} declined your trade.` })
+      setTimeout(() => setToast(null), 1500)
+    }
+    const onOpen = (payload) => {
+      // Determine my id and partner
+      const meId = currentPlayerId
+      const partnerId = payload.aId === meId ? payload.bId : payload.aId
+      setTradeSession({
+        aId: payload.aId,
+        bId: payload.bId,
+        partnerId,
+        partnerName: gameState.players[partnerId]?.name || `Player ${partnerId}`,
+        offers: payload.offers,
+        ready: payload.ready,
+        confirmed: payload.confirmed
+      })
+      setIsPickingTradePartner(false)
+      setPendingTradeInvite(null)
+    }
+    const onUpdate = (payload) => {
+      setTradeSession(prev => prev ? { ...prev, offers: payload.offers, ready: payload.ready, confirmed: payload.confirmed } : prev)
+    }
+    const onComplete = () => {
+      setTradeSession(null)
+      setToast({ type: 'success', text: 'Trade complete!' })
+      setTimeout(() => setToast(null), 1200)
+    }
+    const onCancelled = ({ reason }) => {
+      setTradeSession(null)
+      setPendingTradeInvite(null)
+      setIsPickingTradePartner(false)
+      setToast({ type: 'info', text: 'Trade cancelled.' })
+      setTimeout(() => setToast(null), 1200)
+    }
+    socket.on('trade_invite', onInvite)
+    socket.on('trade_declined', onDeclined)
+    socket.on('trade_open', onOpen)
+    socket.on('trade_update', onUpdate)
+    socket.on('trade_complete', onComplete)
+    socket.on('trade_cancelled', onCancelled)
+    return () => {
+      socket.off('trade_invite', onInvite)
+      socket.off('trade_declined', onDeclined)
+      socket.off('trade_open', onOpen)
+      socket.off('trade_update', onUpdate)
+      socket.off('trade_complete', onComplete)
+      socket.off('trade_cancelled', onCancelled)
+    }
+  }, [socket, currentPlayerId, gameState.players])
+
+  // Trade actions
+  const openTradePicker = () => {
+    setIsPickingTradePartner(true)
+  }
+  const closeTradePicker = () => setIsPickingTradePartner(false)
+  const sendTradeRequest = (targetId) => {
+    if (!socket) return
+    socket.emit('trade_request', { targetId })
+    setToast({ type: 'info', text: 'Trade invite sent.' })
+    setTimeout(() => setToast(null), 1000)
+    setIsPickingTradePartner(false)
+  }
+  const acceptTradeInvite = () => {
+    if (!socket || !pendingTradeInvite) return
+    socket.emit('trade_accept', { fromId: pendingTradeInvite.fromId })
+    setPendingTradeInvite(null)
+  }
+  const declineTradeInvite = () => {
+    if (!socket || !pendingTradeInvite) return
+    socket.emit('trade_decline', { fromId: pendingTradeInvite.fromId })
+    setPendingTradeInvite(null)
+  }
+  const updateTradeOffer = (offer) => {
+    if (!socket || !tradeSession) return
+    socket.emit('trade_offer', { partnerId: tradeSession.partnerId, offer })
+  }
+  const setTradeReady = (ready) => {
+    if (!socket || !tradeSession) return
+    socket.emit('trade_ready', { partnerId: tradeSession.partnerId, ready })
+  }
+  const confirmTrade = () => {
+    if (!socket || !tradeSession) return
+    socket.emit('trade_confirm', { partnerId: tradeSession.partnerId })
+  }
+  const cancelTrade = () => {
+    if (!socket || !tradeSession) return
+    socket.emit('trade_cancel', { partnerId: tradeSession.partnerId })
+    setTradeSession(null)
+  }
+
+  // Smart interact: context-aware single button
+  const smartInteract = () => {
+    if (!currentPlayerId || !gameState.players[currentPlayerId]) return
+    const me = gameState.players[currentPlayerId]
+    const dir = aimDirection || lastFacing || 'right'
+    let tx = me.x, ty = me.y
+    if (dir === 'up') ty = Math.max(0, me.y - 1)
+    else if (dir === 'down') ty = Math.min(23, me.y + 1)
+    else if (dir === 'left') tx = Math.max(0, me.x - 1)
+    else if (dir === 'right') tx = Math.min(23, me.x + 1)
+
+    // Prefer trade if a player is in front
+    const partner = Object.values(gameState.players || {}).find(p => p.isActive && p.id !== currentPlayerId && p.x === tx && p.y === ty)
+    if (partner) { sendTradeRequest(partner.id); return }
+
+    // Open crafting if near a workbench
+    const nearWorkbench = (gameState.blocks || []).some(b => (b.x === tx && b.y === ty && b.type === 'workbench') || (b.x === me.x && b.y === me.y && b.type === 'workbench'))
+    if (nearWorkbench) { setIsCraftingOpen(true); return }
+  }
+
+  // Expose globally for DPad center button
+  useEffect(() => {
+    if (typeof window !== 'undefined') window.__onSmartInteract = smartInteract
+    return () => { if (typeof window !== 'undefined') delete window.__onSmartInteract }
+  }, [smartInteract, gameState, currentPlayerId, aimDirection, lastFacing])
 
   const handleCanvasClick = (x, y) => {
     if (!currentPlayerId || !gameState.players[currentPlayerId]) return
@@ -553,6 +702,9 @@ function App() {
           }
           setGameState(prev => ({ ...prev, blocks: [] }))
         }}
+        onResetLevels={() => {
+          if (socket) socket.emit('reset_levels')
+        }}
         blocksCount={(gameState.blocks || []).length}
         playersCount={Object.keys(gameState.players || {}).length}
       />
@@ -601,8 +753,147 @@ function App() {
           armedSpell={armedSpell}
         allowedDirections={harvestArmed ? allowedHarvestDirections : (armedSpell === 'earth' ? allowedEarthDirections : allowedMoveDirections)}
           onStop={() => { setArmedSpell(null) }}
+          woodcutLevel={(gameState.players[currentPlayerId]?.skills?.woodcutting?.level) || 1}
+          woodcutProgress={(gameState.players[currentPlayerId]?.skills?.woodcutting?.xp || 0) / Math.max(1, ((gameState.players[currentPlayerId]?.skills?.woodcutting?.level) || 1) * 100)}
+          woodXpPulse={woodXpPulse}
+          miningLevel={(gameState.players[currentPlayerId]?.skills?.mining?.level) || 1}
+          miningProgress={(gameState.players[currentPlayerId]?.skills?.mining?.xp || 0) / Math.max(1, ((gameState.players[currentPlayerId]?.skills?.mining?.level) || 1) * 100)}
+          miningXpPulse={miningXpPulse}
+          buildingLevel={(gameState.players[currentPlayerId]?.skills?.building?.level) || 1}
+          buildingProgress={(gameState.players[currentPlayerId]?.skills?.building?.xp || 0) / Math.max(1, ((gameState.players[currentPlayerId]?.skills?.building?.level) || 1) * 100)}
+          buildingXpPulse={buildingXpPulse}
         />
         {/* Inventory modal removed; inventory shown in D-pad bottom-right */}
+        {/* Trade partner picker */}
+        {isPickingTradePartner && currentPlayerId && (
+          <div style={{ position: 'fixed', left: 0, top: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1200 }}>
+            <div style={{ background: '#111', color: '#fff', padding: 16, borderRadius: 10, width: 320 }}>
+              <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 10 }}>Choose trade partner</div>
+              <div style={{ maxHeight: 220, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {Object.values(gameState.players || {})
+                  .filter(p => p.isActive && p.id !== currentPlayerId)
+                  .sort((a,b)=>a.id-b.id)
+                  .map(p => {
+                    const me = gameState.players[currentPlayerId]
+                    const dist = Math.abs((me?.x||0) - (p.x||0)) + Math.abs((me?.y||0) - (p.y||0))
+                    const inRange = dist <= 3
+                    return (
+                      <button key={p.id} onClick={() => inRange && sendTradeRequest(p.id)} style={{ background: inRange ? '#1f2937' : '#333', color: '#fff', border: '1px solid #374151', borderRadius: 8, padding: '8px 10px', textAlign: 'left', cursor: inRange ? 'pointer' : 'not-allowed', opacity: inRange ? 1 : 0.6 }}>
+                        <div style={{ fontWeight: 600 }}>{p.name}</div>
+                        <div style={{ fontSize: 12, opacity: 0.8 }}>ID {p.id} • {inRange ? 'In range' : 'Too far'}</div>
+                      </button>
+                    )
+                  })}
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 10 }}>
+                <button onClick={closeTradePicker} style={{ background: '#374151', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 12px', cursor: 'pointer' }}>Close</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Crafting modal (simple) */}
+        {isCraftingOpen && currentPlayerId && (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1350 }}>
+            <div style={{ background: '#0b0f14', color: '#e5e5e5', width: 360, padding: 16, borderRadius: 10 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                <div style={{ fontWeight: 700 }}>Workbench Crafting</div>
+                <button onClick={() => setIsCraftingOpen(false)} style={{ background: '#374151', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 8px', cursor: 'pointer' }}>Close</button>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <button onClick={() => socket && socket.emit('craft', { recipe: 'upgrade_pickaxe_stone' })} style={{ background: '#1f2937', color: '#fff', border: '1px solid #374151', borderRadius: 8, padding: '10px 12px', textAlign: 'left' }}>
+                  Upgrade Pickaxe → Stone (Cost: 12 stone) • Mining lvl 2+
+                </button>
+                <button onClick={() => socket && socket.emit('craft', { recipe: 'upgrade_pickaxe_gold' })} style={{ background: '#1f2937', color: '#fff', border: '1px solid #374151', borderRadius: 8, padding: '10px 12px', textAlign: 'left' }}>
+                  Upgrade Pickaxe → Gold (Cost: 8 gold, 20 stone) • Mining lvl 6+
+                </button>
+                <button onClick={() => socket && socket.emit('craft', { recipe: 'upgrade_axe_stone' })} style={{ background: '#1f2937', color: '#fff', border: '1px solid #374151', borderRadius: 8, padding: '10px 12px', textAlign: 'left' }}>
+                  Upgrade Axe → Stone (Cost: 10 stone) • Woodcutting lvl 2+
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {/* Incoming trade invite */}
+        {pendingTradeInvite && (
+          <div style={{ position: 'fixed', left: 0, top: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1250 }}>
+            <div style={{ background: '#111', color: '#fff', padding: 16, borderRadius: 10, width: 280, textAlign: 'center' }}>
+              <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>{pendingTradeInvite.fromName || 'Player'} wants to trade</div>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 8 }}>
+                <button onClick={acceptTradeInvite} style={{ background: '#22c55e', color: '#111', fontWeight: 700, border: 'none', padding: '8px 12px', borderRadius: 8, cursor: 'pointer' }}>Accept</button>
+                <button onClick={declineTradeInvite} style={{ background: '#ef4444', color: '#fff', border: 'none', padding: '8px 12px', borderRadius: 8, cursor: 'pointer' }}>Decline</button>
+              </div>
+            </div>
+          </div>
+        )}
+        {/* Trade window */}
+        {tradeSession && currentPlayerId && (
+          <div style={{ position: 'fixed', left: 0, top: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1300 }}>
+            <div style={{ background: '#0b0f14', color: '#e5e5e5', padding: 16, borderRadius: 10, width: 420 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                <div style={{ fontSize: 16, fontWeight: 700 }}>Trade with {tradeSession.partnerName}</div>
+                <button onClick={cancelTrade} style={{ background: '#374151', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 8px', cursor: 'pointer' }}>Cancel</button>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                {/* Your offer */}
+                <div style={{ background: '#111827', border: '1px solid #1f2937', borderRadius: 8, padding: 10 }}>
+                  <div style={{ fontWeight: 700, marginBottom: 6 }}>You offer</div>
+                  {['wood','stone','gold','diamond'].map(res => {
+                    const inv = gameState.players[currentPlayerId]?.inventory || {}
+                    const mine = (tradeSession.offers?.[currentPlayerId]?.[res]) || 0
+                    const max = Math.max(0, Number(inv[res] || 0))
+                    return (
+                      <div key={res} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                        <span style={{ textTransform: 'capitalize' }}>{res}</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <input type="number" min={0} max={max} value={mine}
+                            onChange={(e) => {
+                              const v = Math.max(0, Math.min(max, Math.floor(Number(e.target.value) || 0)))
+                              updateTradeOffer({
+                                wood: res==='wood'?v:(tradeSession.offers?.[currentPlayerId]?.wood||0),
+                                stone: res==='stone'?v:(tradeSession.offers?.[currentPlayerId]?.stone||0),
+                                gold: res==='gold'?v:(tradeSession.offers?.[currentPlayerId]?.gold||0),
+                                diamond: res==='diamond'?v:(tradeSession.offers?.[currentPlayerId]?.diamond||0)
+                              })
+                            }}
+                            style={{ width: 72, background: '#0b1220', color: '#e5e5e5', border: '1px solid #1f2937', borderRadius: 6, padding: '6px 8px' }} />
+                          <span style={{ fontSize: 12, opacity: 0.8 }}>/ {max}</span>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+                {/* Partner offer */}
+                <div style={{ background: '#111827', border: '1px solid #1f2937', borderRadius: 8, padding: 10 }}>
+                  <div style={{ fontWeight: 700, marginBottom: 6 }}>{tradeSession.partnerName} offers</div>
+                  {['wood','stone','gold','diamond'].map(res => {
+                    const theirs = (tradeSession.offers?.[tradeSession.partnerId]?.[res]) || 0
+                    return (
+                      <div key={res} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                        <span style={{ textTransform: 'capitalize' }}>{res}</span>
+                        <div>{theirs}</div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 12 }}>
+                <div style={{ display: 'flex', gap: 12, fontSize: 12 }}>
+                  <span>You: {tradeSession.ready?.[currentPlayerId] ? 'Ready' : 'Not ready'}</span>
+                  <span>{tradeSession.partnerName}: {tradeSession.ready?.[tradeSession.partnerId] ? 'Ready' : 'Not ready'}</span>
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button onClick={() => setTradeReady(!tradeSession.ready?.[currentPlayerId])} style={{ background: tradeSession.ready?.[currentPlayerId] ? '#10b981' : '#374151', color: tradeSession.ready?.[currentPlayerId] ? '#111' : '#fff', border: 'none', padding: '8px 12px', borderRadius: 8, cursor: 'pointer', fontWeight: 700 }}>
+                    {tradeSession.ready?.[currentPlayerId] ? 'Unready' : 'Ready'}
+                  </button>
+                  <button onClick={confirmTrade} disabled={!(tradeSession.ready?.[currentPlayerId] && tradeSession.ready?.[tradeSession.partnerId])} style={{ background: '#22c55e', color: '#111', border: 'none', padding: '8px 12px', borderRadius: 8, cursor: (tradeSession.ready?.[currentPlayerId] && tradeSession.ready?.[tradeSession.partnerId]) ? 'pointer' : 'not-allowed', opacity: (tradeSession.ready?.[currentPlayerId] && tradeSession.ready?.[tradeSession.partnerId]) ? 1 : 0.6, fontWeight: 700 }}>
+                    Confirm
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </>
       )}
     </div>

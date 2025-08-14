@@ -48,6 +48,29 @@ let gameState = {
   spawnedResources: [] // array of { x, y, type }
 };
 
+// In-memory trade sessions
+// key: `${minId}-${maxId}` => {
+//   a: playerIdLow, b: playerIdHigh,
+//   offers: { [playerId]: { wood, stone, gold, diamond } },
+//   ready: { [playerId]: boolean },
+//   confirmed: { [playerId]: boolean }
+// }
+const trades = new Map();
+const getTradeKey = (id1, id2) => {
+  const a = Math.min(Number(id1) || 0, Number(id2) || 0);
+  const b = Math.max(Number(id1) || 0, Number(id2) || 0);
+  return `${a}-${b}`;
+}
+const endTrade = (key, reason = 'cancelled') => {
+  const session = trades.get(key);
+  if (!session) return;
+  const pa = gameState.players[session.a];
+  const pb = gameState.players[session.b];
+  if (pa && pa.isActive && pa.socketId) io.to(pa.socketId).emit('trade_cancelled', { reason });
+  if (pb && pb.isActive && pb.socketId) io.to(pb.socketId).emit('trade_cancelled', { reason });
+  trades.delete(key);
+}
+
 // Helper function to generate a random color for players
 function generateRandomColor() {
   const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD', '#98D8C8', '#F7DC6F'];
@@ -482,6 +505,13 @@ io.on('connection', (socket) => {
     io.emit('block_added', placed)
     console.log(`Block placed at (${cx}, ${cy}) type=${placed.type}`)
     io.emit('inventory_update', { playerId: acting.id, inventory: inv })
+    // Building XP gain
+    acting.skills = acting.skills || { mining: { level: 1, xp: 0 }, woodcutting: { level: 1, xp: 0 }, building: { level: 1, xp: 0 } }
+    const b = acting.skills.building || { level: 1, xp: 0 }
+    b.xp += placed.type === 'workbench' ? 20 : 8
+    while (b.xp >= b.level * 100) { b.xp -= b.level * 100; b.level += 1 }
+    acting.skills.building = b
+    io.emit('harvested', { x: cx, y: cy, type: 'build', playerId: acting.id, inventory: acting.inventory, skills: acting.skills })
     acting._lastActionAt = now
     saveGameState()
   })
@@ -605,6 +635,179 @@ io.on('connection', (socket) => {
     saveGameState()
   })
 
+  // Reset all player skill levels to baseline
+  socket.on('reset_levels', () => {
+    const acting = Object.values(gameState.players).find(p => p.socketId === socket.id)
+    if (!acting || !acting.isActive || (typeof acting.hp === 'number' && acting.hp <= 0)) return
+    Object.values(gameState.players).forEach(p => {
+      if (!p) return
+      p.skills = p.skills || { mining: { level: 1, xp: 0 }, woodcutting: { level: 1, xp: 0 }, building: { level: 1, xp: 0 } }
+      p.skills.mining = { level: 1, xp: 0 }
+      p.skills.woodcutting = { level: 1, xp: 0 }
+      p.skills.building = { level: 1, xp: 0 }
+      io.emit('skills_update', { playerId: p.id, skills: p.skills })
+    })
+    console.log('All player skills reset to level 1')
+    saveGameState()
+  })
+
+  // ========== Trading ==========
+  socket.on('trade_request', (data) => {
+    const actor = Object.values(gameState.players).find(p => p.socketId === socket.id)
+    if (!actor || !actor.isActive || (typeof actor.hp === 'number' && actor.hp <= 0)) return
+    const targetId = Number(data?.targetId)
+    const target = gameState.players[targetId]
+    if (!target || !target.isActive || !target.socketId) return
+    // Prevent if either already trading
+    const tkey = getTradeKey(actor.id, target.id)
+    if (trades.has(tkey)) return
+    // Optional proximity check (Manhattan distance <= 3)
+    const dist = Math.abs(actor.x - target.x) + Math.abs(actor.y - target.y)
+    if (dist > 3) return
+    io.to(target.socketId).emit('trade_invite', { fromId: actor.id, fromName: actor.name })
+  })
+
+  socket.on('trade_decline', (data) => {
+    const decliner = Object.values(gameState.players).find(p => p.socketId === socket.id)
+    if (!decliner) return
+    const fromId = Number(data?.fromId)
+    const inviter = gameState.players[fromId]
+    if (inviter && inviter.isActive && inviter.socketId) {
+      io.to(inviter.socketId).emit('trade_declined', { byId: decliner.id, byName: decliner.name })
+    }
+  })
+
+  socket.on('trade_accept', (data) => {
+    const acceptor = Object.values(gameState.players).find(p => p.socketId === socket.id)
+    if (!acceptor || !acceptor.isActive || (typeof acceptor.hp === 'number' && acceptor.hp <= 0)) return
+    const fromId = Number(data?.fromId)
+    const inviter = gameState.players[fromId]
+    if (!inviter || !inviter.isActive || !inviter.socketId) return
+    const key = getTradeKey(acceptor.id, inviter.id)
+    if (trades.has(key)) return
+    // Optional proximity check
+    const dist = Math.abs(acceptor.x - inviter.x) + Math.abs(acceptor.y - inviter.y)
+    if (dist > 3) return
+    const emptyOffer = { wood: 0, stone: 0, gold: 0, diamond: 0 }
+    const session = {
+      a: Math.min(acceptor.id, inviter.id),
+      b: Math.max(acceptor.id, inviter.id),
+      offers: { [acceptor.id]: { ...emptyOffer }, [inviter.id]: { ...emptyOffer } },
+      ready: { [acceptor.id]: false, [inviter.id]: false },
+      confirmed: { [acceptor.id]: false, [inviter.id]: false }
+    }
+    trades.set(key, session)
+    const openPayload = {
+      aId: session.a, bId: session.b,
+      aName: gameState.players[session.a]?.name,
+      bName: gameState.players[session.b]?.name,
+      offers: session.offers, ready: session.ready, confirmed: session.confirmed
+    }
+    io.to(gameState.players[session.a].socketId).emit('trade_open', openPayload)
+    io.to(gameState.players[session.b].socketId).emit('trade_open', openPayload)
+  })
+
+  socket.on('trade_offer', (data) => {
+    const actor = Object.values(gameState.players).find(p => p.socketId === socket.id)
+    if (!actor || !actor.isActive || (typeof actor.hp === 'number' && actor.hp <= 0)) return
+    const partnerId = Number(data?.partnerId)
+    const key = getTradeKey(actor.id, partnerId)
+    const session = trades.get(key)
+    if (!session) return
+    const offer = data?.offer || {}
+    const inv = actor.inventory || { wood: 0, stone: 0, gold: 0, diamond: 0 }
+    const clamp = (v) => Math.max(0, Math.floor(Number(v) || 0))
+    const newOffer = {
+      wood: Math.min(inv.wood, clamp(offer.wood)),
+      stone: Math.min(inv.stone, clamp(offer.stone)),
+      gold: Math.min(inv.gold, clamp(offer.gold)),
+      diamond: Math.min(inv.diamond || 0, clamp(offer.diamond))
+    }
+    session.offers[actor.id] = newOffer
+    // Changing offer resets readiness/confirmations
+    session.ready[session.a] = false
+    session.ready[session.b] = false
+    session.confirmed[session.a] = false
+    session.confirmed[session.b] = false
+    const payload = { offers: session.offers, ready: session.ready, confirmed: session.confirmed }
+    const pa = gameState.players[session.a]
+    const pb = gameState.players[session.b]
+    if (pa?.socketId) io.to(pa.socketId).emit('trade_update', payload)
+    if (pb?.socketId) io.to(pb.socketId).emit('trade_update', payload)
+  })
+
+  socket.on('trade_ready', (data) => {
+    const actor = Object.values(gameState.players).find(p => p.socketId === socket.id)
+    if (!actor) return
+    const partnerId = Number(data?.partnerId)
+    const ready = !!data?.ready
+    const key = getTradeKey(actor.id, partnerId)
+    const session = trades.get(key)
+    if (!session) return
+    session.ready[actor.id] = ready
+    // Changing ready resets confirmations
+    session.confirmed[session.a] = false
+    session.confirmed[session.b] = false
+    const payload = { offers: session.offers, ready: session.ready, confirmed: session.confirmed }
+    const pa = gameState.players[session.a]
+    const pb = gameState.players[session.b]
+    if (pa?.socketId) io.to(pa.socketId).emit('trade_update', payload)
+    if (pb?.socketId) io.to(pb.socketId).emit('trade_update', payload)
+  })
+
+  socket.on('trade_confirm', (data) => {
+    const actor = Object.values(gameState.players).find(p => p.socketId === socket.id)
+    if (!actor) return
+    const partnerId = Number(data?.partnerId)
+    const key = getTradeKey(actor.id, partnerId)
+    const session = trades.get(key)
+    if (!session) return
+    // Must be ready
+    if (!session.ready[session.a] || !session.ready[session.b]) return
+    session.confirmed[actor.id] = true
+    const bothConfirmed = session.confirmed[session.a] && session.confirmed[session.b]
+    const pa = gameState.players[session.a]
+    const pb = gameState.players[session.b]
+    if (!bothConfirmed) {
+      const payload = { offers: session.offers, ready: session.ready, confirmed: session.confirmed }
+      if (pa?.socketId) io.to(pa.socketId).emit('trade_update', payload)
+      if (pb?.socketId) io.to(pb.socketId).emit('trade_update', payload)
+      return
+    }
+    // Finalize trade: revalidate balances
+    const offerA = session.offers[session.a] || { wood: 0, stone: 0, gold: 0, diamond: 0 }
+    const offerB = session.offers[session.b] || { wood: 0, stone: 0, gold: 0, diamond: 0 }
+    const invA = pa.inventory || { wood: 0, stone: 0, gold: 0, diamond: 0 }
+    const invB = pb.inventory || { wood: 0, stone: 0, gold: 0, diamond: 0 }
+    const hasEnough = (inv, off) => inv.wood >= off.wood && inv.stone >= off.stone && inv.gold >= off.gold && (inv.diamond || 0) >= (off.diamond || 0)
+    if (!hasEnough(invA, offerA) || !hasEnough(invB, offerB)) {
+      // fail safe: cancel
+      endTrade(key, 'insufficient_resources')
+      return
+    }
+    // Apply transfer
+    invA.wood -= offerA.wood; invA.stone -= offerA.stone; invA.gold -= offerA.gold; invA.diamond = (invA.diamond || 0) - (offerA.diamond || 0)
+    invB.wood += offerA.wood; invB.stone += offerA.stone; invB.gold += offerA.gold; invB.diamond = (invB.diamond || 0) + (offerA.diamond || 0)
+    invB.wood -= offerB.wood; invB.stone -= offerB.stone; invB.gold -= offerB.gold; invB.diamond = (invB.diamond || 0) - (offerB.diamond || 0)
+    invA.wood += offerB.wood; invA.stone += offerB.stone; invA.gold += offerB.gold; invA.diamond = (invA.diamond || 0) + (offerB.diamond || 0)
+    pa.inventory = invA
+    pb.inventory = invB
+    io.emit('inventory_update', { playerId: pa.id, inventory: invA })
+    io.emit('inventory_update', { playerId: pb.id, inventory: invB })
+    if (pa?.socketId) io.to(pa.socketId).emit('trade_complete')
+    if (pb?.socketId) io.to(pb.socketId).emit('trade_complete')
+    trades.delete(key)
+    saveGameState()
+  })
+
+  socket.on('trade_cancel', (data) => {
+    const actor = Object.values(gameState.players).find(p => p.socketId === socket.id)
+    if (!actor) return
+    const partnerId = Number(data?.partnerId)
+    const key = getTradeKey(actor.id, partnerId)
+    endTrade(key, 'cancelled')
+  })
+
   // Sync map seed from client so server validation matches client map
   socket.on('set_map_seed', (data) => {
     const acting = Object.values(gameState.players).find(p => p.socketId === socket.id)
@@ -631,6 +834,12 @@ io.on('connection', (socket) => {
       });
       
       console.log(`Player ${player.name} marked as inactive`);
+      // End any active trade session with this player
+      Object.values(gameState.players).forEach(other => {
+        if (!other || !other.id) return
+        const key = getTradeKey(player.id, other.id)
+        if (trades.has(key)) endTrade(key, 'partner_disconnected')
+      })
     }
   });
 });

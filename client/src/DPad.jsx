@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react'
-import { ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Pickaxe, Hammer, Axe } from 'lucide-react'
+import { ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Pickaxe, Hammer, Axe, SquareMousePointer } from 'lucide-react'
 
 const DPad = ({ 
   onMove, 
@@ -20,7 +20,16 @@ const DPad = ({
   harvestTool = 'pickaxe',
   canUsePickaxe = true,
   canUseAxe = true,
-  inventory = { wood: 0, stone: 0, gold: 0, diamond: 0 }
+  inventory = { wood: 0, stone: 0, gold: 0, diamond: 0 },
+  woodcutLevel = 1,
+  woodcutProgress = 0,
+  woodXpPulse = false,
+  miningLevel = 1,
+  miningProgress = 0,
+  miningXpPulse = false,
+  buildingLevel = 1,
+  buildingProgress = 0,
+  buildingXpPulse = false
 }) => {
   const [dpadSize, setDpadSize] = useState({ buttonSize: 40, iconSize: 24 })
 
@@ -175,7 +184,7 @@ const DPad = ({
           onPointerUp={(e) => e.currentTarget.blur()}
           aria-label="Pickaxe"
         >
-          <div className="spell-icon-wrapper">
+          <div className={"spell-icon-wrapper" + (miningXpPulse ? ' xp-pulse-mining' : '')}>
             <Pickaxe size={dpadSize.iconSize} strokeWidth={3} />
             {cooldownFraction > 0 && (
               <div 
@@ -184,6 +193,11 @@ const DPad = ({
                 aria-hidden="true"
               />
             )}
+            <svg className="skill-ring mining" viewBox="0 0 40 40" aria-hidden="true">
+              <circle className="skill-ring-bg" cx="20" cy="20" r="16" />
+              <circle className="skill-ring-fg mining" cx="20" cy="20" r="16" style={{ strokeDasharray: 100, strokeDashoffset: Math.max(0, 100 - Math.min(100, Math.round(miningProgress * 100))) }} />
+            </svg>
+            <div className="skill-level-badge">Lv {miningLevel}</div>
           </div>
         </button>
 
@@ -197,7 +211,16 @@ const DPad = ({
           onPointerDown={() => handleDirectionPress('up')}
           onPointerUp={clearFocus}
         >
-          <ChevronUp size={dpadSize.iconSize} strokeWidth={3} />
+          <div className="spell-icon-wrapper">
+            <ChevronUp size={dpadSize.iconSize} strokeWidth={3} />
+            {cooldownFraction > 0 && (
+              <div 
+                className="cooldown-overlay"
+                style={{ height: `${cooldownFraction * 100}%` }}
+                aria-hidden="true"
+              />
+            )}
+          </div>
         </button>
 
         {/* Axe (top-right) */}
@@ -214,7 +237,7 @@ const DPad = ({
           onPointerUp={(e) => e.currentTarget.blur()}
           aria-label="Axe"
         >
-          <div className="spell-icon-wrapper">
+          <div className={"spell-icon-wrapper" + (woodXpPulse ? ' xp-pulse' : '')}>
             <Axe size={dpadSize.iconSize} strokeWidth={3} />
             {cooldownFraction > 0 && (
               <div 
@@ -223,6 +246,12 @@ const DPad = ({
                 aria-hidden="true"
               />
             )}
+            {/* Woodcutting progress ring */}
+            <svg className="skill-ring" viewBox="0 0 40 40" aria-hidden="true">
+              <circle className="skill-ring-bg" cx="20" cy="20" r="16" />
+              <circle className="skill-ring-fg" cx="20" cy="20" r="16" style={{ strokeDasharray: 100, strokeDashoffset: Math.max(0, 100 - Math.min(100, Math.round(woodcutProgress * 100))) }} />
+            </svg>
+            <div className="skill-level-badge">Lv {woodcutLevel}</div>
           </div>
         </button>
         
@@ -237,7 +266,16 @@ const DPad = ({
             onPointerDown={() => handleDirectionPress('left')}
             onPointerUp={clearFocus}
           >
-            <ChevronLeft size={dpadSize.iconSize} strokeWidth={3} />
+            <div className="spell-icon-wrapper">
+              <ChevronLeft size={dpadSize.iconSize} strokeWidth={3} />
+              {cooldownFraction > 0 && (
+                <div 
+                  className="cooldown-overlay"
+                  style={{ height: `${cooldownFraction * 100}%` }}
+                  aria-hidden="true"
+                />
+              )}
+            </div>
           </button>
           
           <button
@@ -246,11 +284,13 @@ const DPad = ({
               width: `${dpadSize.buttonSize}px`,
               height: `${dpadSize.buttonSize}px`
             }}
-            onPointerDown={(e) => { /* center is neutral now */ }}
+            onPointerDown={() => { if (typeof window !== 'undefined' && window.__onSmartInteract) window.__onSmartInteract(); }}
             onPointerUp={clearFocus}
-            aria-label="Neutral"
+            aria-label="Interact"
           >
-            <div className="spell-icon-wrapper" />
+            <div className="spell-icon-wrapper">
+              <SquareMousePointer size={dpadSize.iconSize} strokeWidth={3} />
+            </div>
           </button>
           
           <button
@@ -262,7 +302,16 @@ const DPad = ({
             onPointerDown={() => handleDirectionPress('right')}
             onPointerUp={clearFocus}
           >
-            <ChevronRight size={dpadSize.iconSize} strokeWidth={3} />
+            <div className="spell-icon-wrapper">
+              <ChevronRight size={dpadSize.iconSize} strokeWidth={3} />
+              {cooldownFraction > 0 && (
+                <div 
+                  className="cooldown-overlay"
+                  style={{ height: `${cooldownFraction * 100}%` }}
+                  aria-hidden="true"
+                />
+              )}
+            </div>
           </button>
         </div>
         
@@ -276,7 +325,16 @@ const DPad = ({
           onPointerDown={() => handleDirectionPress('down')}
           onPointerUp={clearFocus}
         >
-          <ChevronDown size={dpadSize.iconSize} strokeWidth={3} />
+          <div className="spell-icon-wrapper">
+            <ChevronDown size={dpadSize.iconSize} strokeWidth={3} />
+            {cooldownFraction > 0 && (
+              <div 
+                className="cooldown-overlay"
+                style={{ height: `${cooldownFraction * 100}%` }}
+                aria-hidden="true"
+              />
+            )}
+          </div>
         </button>
 
         {/* Build/Hammer button (bottom-left) */}
@@ -290,7 +348,7 @@ const DPad = ({
           onPointerUp={(e) => e.currentTarget.blur()}
           aria-label="Build / Hammer"
         >
-          <div className="spell-icon-wrapper">
+          <div className={"spell-icon-wrapper" + (buildingXpPulse ? ' xp-pulse-build' : '')}>
             <Hammer size={dpadSize.iconSize} strokeWidth={3} />
             {cooldownFraction > 0 && (
               <div 
@@ -299,6 +357,11 @@ const DPad = ({
                 aria-hidden="true"
               />
             )}
+            <svg className="skill-ring build" viewBox="0 0 40 40" aria-hidden="true">
+              <circle className="skill-ring-bg" cx="20" cy="20" r="16" />
+              <circle className="skill-ring-fg build" cx="20" cy="20" r="16" style={{ strokeDasharray: 100, strokeDashoffset: Math.max(0, 100 - Math.min(100, Math.round(buildingProgress * 100))) }} />
+            </svg>
+            <div className="skill-level-badge">Lv {buildingLevel}</div>
           </div>
         </button>
 
