@@ -23,6 +23,7 @@ function App() {
   const [armedSpell, setArmedSpell] = useState(null) // 'earth' | null
   const [lastSpellTime, setLastSpellTime] = useState(0) // Spell-only cooldown anchor (ms)
   const [cooldownMsLeft, setCooldownMsLeft] = useState(0)
+  const [cooldownsEnabled, setCooldownsEnabled] = useState(false)
   const [showInventory, setShowInventory] = useState(false)
   // Removed top toast in favor of the death modal only
   const [toast, setToast] = useState(null)
@@ -34,6 +35,8 @@ function App() {
   const [woodXpPulse, setWoodXpPulse] = useState(false)
   const [miningXpPulse, setMiningXpPulse] = useState(false)
   const [buildingXpPulse, setBuildingXpPulse] = useState(false)
+  const [uiMode, setUiMode] = useState('default')
+  const [menuPage, setMenuPage] = useState('root')
   const isMeDead = useMemo(() => {
     if (!currentPlayerId) return false
     const me = gameState.players[currentPlayerId]
@@ -83,12 +86,14 @@ function App() {
     for (let k = 0; k < goldCount && idx + k < total; k++) types[indices[idx + k]] = 'gold'
     idx += goldCount
     for (let k = 0; k < diamondCount && idx + k < total; k++) types[indices[idx + k]] = 'diamond'
+    // Promote some wood tiles to 'oak' deterministically to match canvas/server visuals
+    // Remove oak variant for simplicity
     return types
   }, [mapSeed])
 
   // Compute viable directions for placing an earth block (client-side mirror of server rules)
   const allowedEarthDirections = useMemo(() => {
-    if (armedSpell !== 'earth' || !currentPlayerId || !gameState.players[currentPlayerId]) return null
+    if (!currentPlayerId || !gameState.players[currentPlayerId]) return null
     const me = gameState.players[currentPlayerId]
     const harvestedSet = new Set((gameState.harvested || []).map(h => `${h.x},${h.y}`))
     const spawnedSet = new Set((gameState.spawnedResources || []).map(s => `${s.x},${s.y}`))
@@ -115,33 +120,37 @@ function App() {
       left: isCellViable(Math.max(0, me.x - 1), me.y),
       right: isCellViable(Math.min(23, me.x + 1), me.y)
     }
-  }, [armedSpell, currentPlayerId, gameState.players, gameState.blocks, gameState.harvested, gameState.spawnedResources, resourceMap])
+  }, [currentPlayerId, gameState.players, gameState.blocks, gameState.harvested, gameState.spawnedResources, resourceMap])
 
   // Compute viable directions for movement (cannot step into players, earth blocks, or resources)
   const allowedMoveDirections = useMemo(() => {
     if (!currentPlayerId || !gameState.players[currentPlayerId]) return null
     const me = gameState.players[currentPlayerId]
     const harvestedSet = new Set((gameState.harvested || []).map(h => `${h.x},${h.y}`))
-    const isCellWalkable = (tx, ty) => {
+    const idx = (dx, dy) => (me.y + dy) * GRID_COLS + (me.x + dx)
+    const can = (dx, dy) => {
+      const tx = me.x + dx
+      const ty = me.y + dy
       if (tx < 0 || tx > 23 || ty < 0 || ty > 23) return false
-      // cannot move into server blocks
+      // Server blocks known precisely
       if ((gameState.blocks || []).some(b => b.x === tx && b.y === ty)) return false
-      // cannot move into non-open resource
-      const idx = ty * GRID_COLS + tx
-      const type = resourceMap[idx]
-      if (type && type !== 'open' && !harvestedSet.has(`${tx},${ty}`)) return false
-      // cannot move into tile with another active player
-      const occupied = Object.values(gameState.players || {}).some(p => p.isActive && p.id !== currentPlayerId && p.x === tx && p.y === ty)
-      if (occupied) return false
+      // If a dynamic resource is spawned there and not harvested, block move
+      const dyn = (gameState.spawnedResources || []).find(s => s.x === tx && s.y === ty)
+      if (dyn && !harvestedSet.has(`${tx},${ty}`)) return false
+      // Fallback to base map type
+      const baseType = resourceMap[idx(dx, dy)]
+      if (baseType && baseType !== 'open' && !harvestedSet.has(`${tx},${ty}`)) return false
+      // Another player occupying
+      if (Object.values(gameState.players || {}).some(p => p.isActive && p.id !== currentPlayerId && p.x === tx && p.y === ty)) return false
       return true
     }
     return {
-      up: isCellWalkable(me.x, Math.max(0, me.y - 1)),
-      down: isCellWalkable(me.x, Math.min(23, me.y + 1)),
-      left: isCellWalkable(Math.max(0, me.x - 1), me.y),
-      right: isCellWalkable(Math.min(23, me.x + 1), me.y)
+      up: can(0, -1),
+      down: can(0, 1),
+      left: can(-1, 0),
+      right: can(1, 0)
     }
-  }, [currentPlayerId, gameState.players, gameState.blocks, resourceMap])
+  }, [currentPlayerId, gameState.players, gameState.blocks, gameState.spawnedResources, gameState.harvested, resourceMap])
 
   // Compute viable directions for mining (stone/gold/diamond) and woodcutting (wood)
   const allowedHarvestDirections = useMemo(() => {
@@ -192,6 +201,12 @@ function App() {
     return !!(dirs.up || dirs.down || dirs.left || dirs.right)
   }, [allowedHarvestDirections])
 
+  const canBuildEarth = useMemo(() => {
+    const dirs = allowedEarthDirections
+    if (!dirs) return false
+    return !!(dirs.up || dirs.down || dirs.left || dirs.right)
+  }, [allowedEarthDirections])
+
   useEffect(() => {
     const serverUrl = import.meta.env.PROD 
       ? 'https://calm-simplicity-production.up.railway.app' 
@@ -212,6 +227,9 @@ function App() {
       setCurrentPlayerId(data.playerId)
       if (Number.isInteger(data.gameState?.mapSeed)) {
         setMapSeed(data.gameState.mapSeed)
+      }
+      if (typeof data.gameState?.settings?.cooldownsEnabled === 'boolean') {
+        setCooldownsEnabled(!!data.gameState.settings.cooldownsEnabled)
       }
     })
 
@@ -286,6 +304,11 @@ function App() {
       if (me) { setBuildingXpPulse(true); setTimeout(() => setBuildingXpPulse(false), 600) }
     })
 
+    newSocket.on('build_rejected', (data) => {
+      setToast({ type: 'info', text: `Build failed: ${data?.reason || 'unknown'}` })
+      setTimeout(() => setToast(null), 1000)
+    })
+
     newSocket.on('block_removed', (data) => {
       const { x, y } = data
       setGameState(prev => ({
@@ -316,6 +339,12 @@ function App() {
 
     newSocket.on('map_seed', ({ seed }) => {
       if (Number.isInteger(seed)) setMapSeed(seed)
+    })
+
+    newSocket.on('settings_update', (settings) => {
+      if (settings && typeof settings.cooldownsEnabled === 'boolean') {
+        setCooldownsEnabled(!!settings.cooldownsEnabled)
+      }
     })
 
     // Projectiles removed
@@ -512,8 +541,10 @@ function App() {
     if (armedSpell) castArmedSpellInDirection(armedSpell, direction)
     else {
       const now = performance.now()
-      if (now - lastSpellTime < COOLDOWN_MS) return
-      setLastSpellTime(now)
+      if (cooldownsEnabled) {
+        if (now - lastSpellTime < COOLDOWN_MS) return
+        setLastSpellTime(now)
+      }
       attemptMoveOnce(direction)
     }
   }
@@ -532,8 +563,10 @@ function App() {
       const dirs = harvestTool === 'axe' ? allowedHarvestDirections?.wood : allowedHarvestDirections?.ore
       if (!dirs || dirs[direction]) {
         const now = performance.now()
-        if (now - lastSpellTime < COOLDOWN_MS) { setHarvestArmed(false); return }
-        setLastSpellTime(now)
+        if (cooldownsEnabled) {
+          if (now - lastSpellTime < COOLDOWN_MS) { setHarvestArmed(false); return }
+          setLastSpellTime(now)
+        }
         if (socket) socket.emit('harvest', { x: tx, y: ty, tool: harvestTool })
       }
       setHarvestArmed(false)
@@ -545,8 +578,10 @@ function App() {
       return
     }
     const now = performance.now()
-    if (now - lastSpellTime < COOLDOWN_MS) return
-    setLastSpellTime(now)
+    if (cooldownsEnabled) {
+      if (now - lastSpellTime < COOLDOWN_MS) return
+      setLastSpellTime(now)
+    }
     attemptMoveOnce(direction)
   }
 
@@ -586,12 +621,13 @@ function App() {
       if (socket) socket.emit('player_move', { x: newX, y: newY })
   }
 
-  // Earth placement with cooldown
+  // Earth placement: do not block on client cooldown; server is authoritative
   const castArmedSpellInDirection = (spellType, direction) => {
     const now = performance.now()
-    if (now - lastSpellTime < COOLDOWN_MS) { setArmedSpell(null); return }
-    setLastSpellTime(now)
+    // Clear armed state regardless
     setArmedSpell(null)
+    // Only update client cooldown timer if not currently cooling down
+    if (cooldownsEnabled && (now - lastSpellTime >= COOLDOWN_MS)) setLastSpellTime(now)
     if (spellType === 'earth') handleEarthPlace(direction)
   }
 
@@ -610,8 +646,7 @@ function App() {
       case 'left': targetX = Math.max(0, me.x - 1); break
       case 'right': targetX = Math.min(23, me.x + 1); break
     }
-    // Client-side viability check to avoid emitting impossible placements
-    if (allowedEarthDirections && allowedEarthDirections[dir] === false) return
+    // Defer viability to server; always attempt
     // Default to 'wall'; Shift could place workbench (optional later)
     if (socket) socket.emit('place_block', { x: targetX, y: targetY, type: 'wall' })
   }
@@ -629,7 +664,7 @@ function App() {
       const dtSec = Math.min(0.05, Math.max(0, (now - lastTime) / 1000)) // clamp dt
       lastTime = now
       // Update spell cooldown remaining
-      setCooldownMsLeft(Math.max(0, COOLDOWN_MS - (now - lastSpellTime)))
+      setCooldownMsLeft(cooldownsEnabled ? Math.max(0, COOLDOWN_MS - (now - lastSpellTime)) : 0)
       // No toast lifecycle anymore
       rafId = requestAnimationFrame(tick)
     }
@@ -707,6 +742,10 @@ function App() {
         }}
         blocksCount={(gameState.blocks || []).length}
         playersCount={Object.keys(gameState.players || {}).length}
+        cooldownsEnabled={cooldownsEnabled}
+        onToggleCooldowns={() => {
+          if (socket) socket.emit('set_settings', { cooldownsEnabled: !cooldownsEnabled })
+        }}
       />
       {!isMeDead && (
       <>
@@ -715,32 +754,37 @@ function App() {
           onSpell={null}
           onFrost={handleFrostCast}
         onArmEarth={() => setArmedSpell(prev => {
+          // Toggle earth build mode, and disarm any harvest tool
           const next = prev === 'earth' ? null : 'earth'
-          if (next === 'earth') setHarvestArmed(false)
+          if (next === 'earth') { setHarvestArmed(false) }
           return next
         })}
         onArmAir={null}
         onPickaxe={() => {
-          // Share the same cooldown as spells; arming is instant, but harvest occurs on arrow press
-          const now = performance.now()
-          if (now - lastSpellTime < COOLDOWN_MS) return
-          setHarvestArmed(prev => {
-            const next = !prev
-            if (next) setArmedSpell(null)
-            return next
-          })
+          // Toggle pickaxe arming. Disarm if already armed with pickaxe; otherwise arm pickaxe.
+          setArmedSpell(null)
+          if (harvestArmed && harvestTool === 'pickaxe') {
+            setHarvestArmed(false)
+          } else {
+            setHarvestTool('pickaxe')
+            setHarvestArmed(true)
+          }
         }}
         onAxe={() => {
-          const now = performance.now()
-          if (now - lastSpellTime < COOLDOWN_MS) return
-          setHarvestTool(prev => prev === 'axe' ? 'pickaxe' : 'axe')
-          setHarvestArmed(true)
+          // Toggle axe arming. Disarm if already armed with axe; otherwise arm axe.
           setArmedSpell(null)
+          if (harvestArmed && harvestTool === 'axe') {
+            setHarvestArmed(false)
+          } else {
+            setHarvestTool('axe')
+            setHarvestArmed(true)
+          }
         }}
         harvestArmed={harvestArmed}
         harvestTool={harvestTool}
         canUsePickaxe={canUsePickaxe}
         canUseAxe={canUseAxe}
+        canBuildEarth={canBuildEarth}
         inventory={{
           wood: (gameState.players[currentPlayerId]?.inventory?.wood) ?? 0,
           stone: (gameState.players[currentPlayerId]?.inventory?.stone) ?? 0,
@@ -748,10 +792,10 @@ function App() {
           items: gameState.players[currentPlayerId]?.items || []
         }}
           canvasSize={canvasSize}
-          cooldownFraction={Math.max(0, Math.min(1, cooldownMsLeft / COOLDOWN_MS))}
+          cooldownFraction={cooldownsEnabled ? Math.max(0, Math.min(1, cooldownMsLeft / COOLDOWN_MS)) : 0}
           aimDirection={aimDirection}
           armedSpell={armedSpell}
-        allowedDirections={harvestArmed ? allowedHarvestDirections : (armedSpell === 'earth' ? allowedEarthDirections : allowedMoveDirections)}
+        allowedDirections={harvestArmed ? allowedHarvestDirections : (armedSpell === 'earth' ? { up: true, down: true, left: true, right: true } : allowedMoveDirections)}
           onStop={() => { setArmedSpell(null) }}
           woodcutLevel={(gameState.players[currentPlayerId]?.skills?.woodcutting?.level) || 1}
           woodcutProgress={(gameState.players[currentPlayerId]?.skills?.woodcutting?.xp || 0) / Math.max(1, ((gameState.players[currentPlayerId]?.skills?.woodcutting?.level) || 1) * 100)}
@@ -762,6 +806,11 @@ function App() {
           buildingLevel={(gameState.players[currentPlayerId]?.skills?.building?.level) || 1}
           buildingProgress={(gameState.players[currentPlayerId]?.skills?.building?.xp || 0) / Math.max(1, ((gameState.players[currentPlayerId]?.skills?.building?.level) || 1) * 100)}
           buildingXpPulse={buildingXpPulse}
+          uiMode={uiMode}
+          menuPage={menuPage}
+          onToggleMenu={() => { setUiMode(prev => prev === 'menu' ? 'default' : 'menu'); setMenuPage('root') }}
+          onMenuBack={() => { setUiMode('default'); setMenuPage('root') }}
+          onSelectMenuPage={(p) => setMenuPage(p)}
         />
         {/* Inventory modal removed; inventory shown in D-pad bottom-right */}
         {/* Trade partner picker */}

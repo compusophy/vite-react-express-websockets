@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react'
-import { ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Pickaxe, Hammer, Axe, SquareMousePointer } from 'lucide-react'
+import { ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Pickaxe, Hammer, Axe, Square, Package, BarChart3, Wrench, Cog } from 'lucide-react'
 
 const DPad = ({ 
   onMove, 
@@ -20,6 +20,7 @@ const DPad = ({
   harvestTool = 'pickaxe',
   canUsePickaxe = true,
   canUseAxe = true,
+  canBuildEarth = true,
   inventory = { wood: 0, stone: 0, gold: 0, diamond: 0 },
   woodcutLevel = 1,
   woodcutProgress = 0,
@@ -29,7 +30,12 @@ const DPad = ({
   miningXpPulse = false,
   buildingLevel = 1,
   buildingProgress = 0,
-  buildingXpPulse = false
+  buildingXpPulse = false,
+  uiMode = 'default',
+  menuPage = 'root',
+  onToggleMenu = null,
+  onMenuBack = null,
+  onSelectMenuPage = null
 }) => {
   const [dpadSize, setDpadSize] = useState({ buttonSize: 40, iconSize: 24 })
 
@@ -90,7 +96,10 @@ const DPad = ({
       }
     }
     const isCenter = direction === 'center'
-    const isDisabled = isArrow ? !allowed : false
+    const isCorner = direction === 'pickaxe' || direction === 'axe' || direction === 'earth'
+    const isDisabled = isArrow ? !allowed : (isCorner ? (
+      direction === 'pickaxe' ? !canUsePickaxe : direction === 'axe' ? !canUseAxe : !canBuildEarth
+    ) : false)
     const disabledClass = isDisabled ? ' disabled' : ''
     const activeClass = (direction === 'earth' && armedSpell === 'earth') ? ' aim' : ''
     return `${baseClass} ${direction}${disabledClass}${activeClass}`
@@ -170,7 +179,7 @@ const DPad = ({
         { /* We'll add the 'await-direction' class when armedSpell is set */ }
         { /* Compute once for readability */ }
         { /* Note: We keep aim glow only when a spell is armed */ }
-        {/* Pickaxe tool (top-left) */}
+        {/* Pickaxe tool (top-left) or Inventory when in menu */}
         <button
           className={getButtonClass('pickaxe') + (harvestArmed && harvestTool === 'pickaxe' ? ' aim' : '')}
           style={{
@@ -178,14 +187,15 @@ const DPad = ({
             height: `${dpadSize.buttonSize}px`
           }}
           onPointerDown={() => {
+            if (uiMode === 'menu') { if (onSelectMenuPage) onSelectMenuPage('inventory'); return }
             if (!canUsePickaxe) return
             if (onPickaxe) onPickaxe()
           }}
           onPointerUp={(e) => e.currentTarget.blur()}
-          aria-label="Pickaxe"
+          aria-label={uiMode==='menu' ? 'Inventory' : 'Pickaxe'}
         >
           <div className={"spell-icon-wrapper" + (miningXpPulse ? ' xp-pulse-mining' : '')}>
-            <Pickaxe size={dpadSize.iconSize} strokeWidth={3} />
+            {uiMode==='menu' ? <Package size={dpadSize.iconSize} strokeWidth={3} /> : <Pickaxe size={dpadSize.iconSize} strokeWidth={3} />}
             {cooldownFraction > 0 && (
               <div 
                 className="cooldown-overlay"
@@ -193,11 +203,6 @@ const DPad = ({
                 aria-hidden="true"
               />
             )}
-            <svg className="skill-ring mining" viewBox="0 0 40 40" aria-hidden="true">
-              <circle className="skill-ring-bg" cx="20" cy="20" r="16" />
-              <circle className="skill-ring-fg mining" cx="20" cy="20" r="16" style={{ strokeDasharray: 100, strokeDashoffset: Math.max(0, 100 - Math.min(100, Math.round(miningProgress * 100))) }} />
-            </svg>
-            <div className="skill-level-badge">Lv {miningLevel}</div>
           </div>
         </button>
 
@@ -223,22 +228,23 @@ const DPad = ({
           </div>
         </button>
 
-        {/* Axe (top-right) */}
+        {/* Axe (top-right) in default; Skills in menu root */}
         <button
-          className={getButtonClass('axe') + (harvestArmed && harvestTool === 'axe' ? ' aim' : '')}
+          className={getButtonClass('axe') + (harvestArmed && harvestTool === 'axe' && !(uiMode==='menu' && menuPage==='root') ? ' aim' : '')}
           style={{
             width: `${dpadSize.buttonSize}px`,
             height: `${dpadSize.buttonSize}px`
           }}
           onPointerDown={() => {
+            if (uiMode === 'menu' && menuPage === 'root') { if (onSelectMenuPage) onSelectMenuPage('skills'); return }
             if (!canUseAxe) return
             if (onAxe) onAxe()
           }}
           onPointerUp={(e) => e.currentTarget.blur()}
-          aria-label="Axe"
+          aria-label={uiMode==='menu' && menuPage==='root' ? 'Skills' : 'Axe'}
         >
           <div className={"spell-icon-wrapper" + (woodXpPulse ? ' xp-pulse' : '')}>
-            <Axe size={dpadSize.iconSize} strokeWidth={3} />
+            {(uiMode==='menu' && menuPage==='root') ? <BarChart3 size={dpadSize.iconSize} strokeWidth={3} /> : <Axe size={dpadSize.iconSize} strokeWidth={3} />}
             {cooldownFraction > 0 && (
               <div 
                 className="cooldown-overlay"
@@ -246,12 +252,6 @@ const DPad = ({
                 aria-hidden="true"
               />
             )}
-            {/* Woodcutting progress ring */}
-            <svg className="skill-ring" viewBox="0 0 40 40" aria-hidden="true">
-              <circle className="skill-ring-bg" cx="20" cy="20" r="16" />
-              <circle className="skill-ring-fg" cx="20" cy="20" r="16" style={{ strokeDasharray: 100, strokeDashoffset: Math.max(0, 100 - Math.min(100, Math.round(woodcutProgress * 100))) }} />
-            </svg>
-            <div className="skill-level-badge">Lv {woodcutLevel}</div>
           </div>
         </button>
         
@@ -284,12 +284,12 @@ const DPad = ({
               width: `${dpadSize.buttonSize}px`,
               height: `${dpadSize.buttonSize}px`
             }}
-            onPointerDown={() => { if (typeof window !== 'undefined' && window.__onSmartInteract) window.__onSmartInteract(); }}
+            onPointerDown={() => { if (onMenuBack) onMenuBack() }}
             onPointerUp={clearFocus}
-            aria-label="Interact"
+            aria-label="Home"
           >
             <div className="spell-icon-wrapper">
-              <SquareMousePointer size={dpadSize.iconSize} strokeWidth={3} />
+              <Square size={dpadSize.iconSize} strokeWidth={3} />
             </div>
           </button>
           
@@ -337,19 +337,23 @@ const DPad = ({
           </div>
         </button>
 
-        {/* Build/Hammer button (bottom-left) */}
+        {/* Bottom-left: Hammer in default; Crafting in menu root */}
           <button
             className={getButtonClass('earth')}
           style={{
             width: `${dpadSize.buttonSize}px`,
             height: `${dpadSize.buttonSize}px`
           }}
-          onPointerDown={handleEarthPress}
+          onPointerDown={() => {
+            if (uiMode === 'menu' && menuPage === 'root') { if (onSelectMenuPage) onSelectMenuPage('crafting'); return }
+            if (!canBuildEarth) return
+            handleEarthPress()
+          }}
           onPointerUp={(e) => e.currentTarget.blur()}
-          aria-label="Build / Hammer"
+          aria-label={uiMode==='menu' && menuPage==='root' ? 'Crafting' : 'Build / Hammer'}
         >
           <div className={"spell-icon-wrapper" + (buildingXpPulse ? ' xp-pulse-build' : '')}>
-            <Hammer size={dpadSize.iconSize} strokeWidth={3} />
+            {(uiMode==='menu' && menuPage==='root') ? <Wrench size={dpadSize.iconSize} strokeWidth={3} /> : <Hammer size={dpadSize.iconSize} strokeWidth={3} />}
             {cooldownFraction > 0 && (
               <div 
                 className="cooldown-overlay"
@@ -357,15 +361,10 @@ const DPad = ({
                 aria-hidden="true"
               />
             )}
-            <svg className="skill-ring build" viewBox="0 0 40 40" aria-hidden="true">
-              <circle className="skill-ring-bg" cx="20" cy="20" r="16" />
-              <circle className="skill-ring-fg build" cx="20" cy="20" r="16" style={{ strokeDasharray: 100, strokeDashoffset: Math.max(0, 100 - Math.min(100, Math.round(buildingProgress * 100))) }} />
-            </svg>
-            <div className="skill-level-badge">Lv {buildingLevel}</div>
           </div>
         </button>
 
-        {/* Inventory display (bottom-right) */}
+        {/* Bottom-right: Menu entry or panel content */}
         <button
           className={getButtonClass('air')}
           style={{
@@ -373,11 +372,70 @@ const DPad = ({
             height: `${dpadSize.buttonSize}px`,
             padding: 0
           }}
-          aria-label="Inventory"
+          aria-label={uiMode==='menu' ? 'Menu Panel' : 'Open Menu'}
+          onPointerDown={() => { if (uiMode==='default' && onToggleMenu) onToggleMenu() }}
         >
-          <div style={{ width: '100%', height: '100%' }}>
-            <InventoryGrid inv={inventory} items={inventory?.items || []} />
-          </div>
+          {uiMode === 'default' ? (
+            <div style={{ width: '100%', height: '100%', padding: 0 }}>
+              <div style={{ pointerEvents: 'none', width: '100%', height: '100%', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gridTemplateRows: 'repeat(3, 1fr)', gap: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Package size={Math.floor((dpadSize.buttonSize/3)*0.6)} /></div>
+                <div />
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}><BarChart3 size={Math.floor((dpadSize.buttonSize/3)*0.6)} /></div>
+                <div />
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Square size={Math.floor((dpadSize.buttonSize/3)*0.6)} /></div>
+                <div />
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Wrench size={Math.floor((dpadSize.buttonSize/3)*0.6)} /></div>
+                <div />
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Cog size={Math.floor((dpadSize.buttonSize/3)*0.6)} /></div>
+              </div>
+            </div>
+          ) : menuPage === 'root' ? (
+            // In menu root: single full-tile Cog button, styled identically to other DPad squares
+            <button
+              onClick={() => onSelectMenuPage && onSelectMenuPage('settings')}
+              className="dpad-button"
+              aria-label="Settings"
+              style={{ width: '100%', height: '100%', padding: 0 }}
+            >
+              <Cog size={dpadSize.iconSize} />
+            </button>
+          ) : (
+            <div style={{ width: '100%', height: '100%', padding: 6 }}>
+              {menuPage === 'inventory' && (
+                <div style={{ width: '100%', height: '100%' }}>
+                  <InventoryGrid inv={inventory} items={inventory?.items || []} />
+                </div>
+              )}
+              {menuPage === 'skills' && (
+                <div style={{ width: '100%', height: '100%', display: 'grid', gridTemplateRows: 'repeat(3, 1fr)', gap: 4 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#111827', border: '1px solid #1f2937', padding: '6px 8px' }}>
+                    <span>Woodcutting</span>
+                    <div style={{ flex: 1, marginLeft: 8, height: 6, background: '#0b1220', borderRadius: 4, overflow: 'hidden' }}>
+                      <div style={{ width: `${Math.round(woodcutProgress*100)}%`, height: '100%', background: '#22c55e' }} />
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#111827', border: '1px solid #1f2937', padding: '6px 8px' }}>
+                    <span>Mining</span>
+                    <div style={{ flex: 1, marginLeft: 8, height: 6, background: '#0b1220', borderRadius: 4, overflow: 'hidden' }}>
+                      <div style={{ width: `${Math.round(miningProgress*100)}%`, height: '100%', background: '#60a5fa' }} />
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#111827', border: '1px solid #1f2937', padding: '6px 8px' }}>
+                    <span>Building</span>
+                    <div style={{ flex: 1, marginLeft: 8, height: 6, background: '#0b1220', borderRadius: 4, overflow: 'hidden' }}>
+                      <div style={{ width: `${Math.round(buildingProgress*100)}%`, height: '100%', background: '#f59e0b' }} />
+                    </div>
+                  </div>
+                </div>
+              )}
+              {menuPage === 'crafting' && (
+                <div style={{ color: '#9ca3af', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>Craft at a workbench</div>
+              )}
+              {menuPage === 'settings' && (
+                <div style={{ color: '#9ca3af', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>Settings</div>
+              )}
+            </div>
+          )}
         </button>
       </div>
     </div>

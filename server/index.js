@@ -45,8 +45,25 @@ let gameState = {
   mapSeed: Math.floor(Math.random() * 1e9),
   // projectiles removed
   harvested: [], // array of { x, y }
-  spawnedResources: [] // array of { x, y, type }
+  spawnedResources: [], // array of { x, y, type }
+  settings: { cooldownsEnabled: false }
 };
+
+// Runescape-like XP curve helpers
+// Cumulative XP to reach a given level (level >= 1). Level 1 -> 0xp, Level 2 -> 83xp
+function rsCumulativeXp(level) {
+  if (level <= 1) return 0;
+  let points = 0;
+  for (let lvl = 1; lvl < level; lvl++) {
+    points += Math.floor(lvl + 300 * Math.pow(2, lvl / 7));
+  }
+  return Math.floor(points / 4);
+}
+function rsXpToNextLevel(currentLevel) {
+  const cur = rsCumulativeXp(currentLevel);
+  const next = rsCumulativeXp(currentLevel + 1);
+  return Math.max(1, next - cur);
+}
 
 // In-memory trade sessions
 // key: `${minId}-${maxId}` => {
@@ -337,6 +354,10 @@ function cleanupInactivePlayers() {
 
 // Initialize game state on startup
 loadGameState();
+// Ensure runtime settings exist after loading
+if (!gameState.settings || typeof gameState.settings !== 'object') {
+  gameState.settings = { cooldownsEnabled: false };
+}
 
 // Set up periodic saving
 setInterval(saveGameState, SAVE_INTERVAL);
@@ -396,7 +417,8 @@ io.on('connection', (socket) => {
     }
     // Simple per-action cooldown (shared across actions)
     const now = Date.now();
-    if (typeof player._lastActionAt === 'number' && now - player._lastActionAt < 950) {
+    const enforceCooldown = !!(gameState.settings && gameState.settings.cooldownsEnabled);
+    if (enforceCooldown && typeof player._lastActionAt === 'number' && now - player._lastActionAt < 950) {
       socket.emit('player_position', { playerId: player.id, x: player.x, y: player.y });
       return;
     }
@@ -448,9 +470,10 @@ io.on('connection', (socket) => {
     const acting = Object.values(gameState.players).find(p => p.socketId === socket.id)
     if (!acting || !acting.isActive || (typeof acting.hp === 'number' && acting.hp <= 0)) return
     const now = Date.now();
-    if (typeof acting._lastActionAt === 'number' && now - acting._lastActionAt < 950) return
+    const enforceCooldown = !!(gameState.settings && gameState.settings.cooldownsEnabled);
+    if (enforceCooldown && typeof acting._lastActionAt === 'number' && now - acting._lastActionAt < 950) { socket.emit('build_rejected', { reason: 'cooldown' }); return }
     const { x, y, type } = data || {}
-    if (typeof x !== 'number' || typeof y !== 'number') return
+    if (typeof x !== 'number' || typeof y !== 'number') { socket.emit('build_rejected', { reason: 'bad_request' }); return }
     // clamp to grid 0..23
     const cx = Math.max(0, Math.min(23, Math.floor(x)))
     const cy = Math.max(0, Math.min(23, Math.floor(y)))
@@ -460,6 +483,7 @@ io.on('connection', (socket) => {
       // Remove existing block if not occupied by a player
       if (occupiedByPlayer) {
         console.log(`Reject block removal at (${cx}, ${cy}) - occupied by player`)
+        socket.emit('build_rejected', { reason: 'occupied_by_player' })
         return
       }
       gameState.blocks = gameState.blocks.filter(b => !(b.x === cx && b.y === cy))
@@ -472,12 +496,14 @@ io.on('connection', (socket) => {
     // Add block path: ensure not on player and not on resource
     if (occupiedByPlayer) {
       console.log(`Reject block at (${cx}, ${cy}) - occupied by player`)
+      socket.emit('build_rejected', { reason: 'occupied_by_player' })
       return
     }
     const cellType = getCellType(cx, cy, gameState.mapSeed)
     const wasHarvested = (gameState.harvested || []).some(h => h.x === cx && h.y === cy)
     if (!wasHarvested && cellType !== 'open') {
       console.log(`Reject block at (${cx}, ${cy}) - resource cell: ${cellType}`)
+      socket.emit('build_rejected', { reason: 'resource_cell', cellType })
       return
     }
     // Enforce simple costs for structures
@@ -487,6 +513,7 @@ io.on('connection', (socket) => {
       const cost = { wood: 10, stone: 5 }
       if (inv.wood < cost.wood || inv.stone < cost.stone) {
         console.log(`Reject build at (${cx}, ${cy}) - insufficient materials for workbench`)
+        socket.emit('build_rejected', { reason: 'insufficient_materials', structure: 'workbench' })
         return
       }
       inv.wood -= cost.wood
@@ -497,7 +524,7 @@ io.on('connection', (socket) => {
       let material = null
       if (inv.wood >= 4) { inv.wood -= 4; material = 'wood' }
       else if (inv.stone >= 4) { inv.stone -= 4; material = 'stone' }
-      else { console.log(`Reject build at (${cx}, ${cy}) - insufficient materials for wall`); return }
+      else { console.log(`Reject build at (${cx}, ${cy}) - insufficient materials for wall`); socket.emit('build_rejected', { reason: 'insufficient_materials', structure: 'wall' }); return }
       placed = { x: cx, y: cy, type: 'wall', material }
     }
     acting.inventory = inv
@@ -509,7 +536,7 @@ io.on('connection', (socket) => {
     acting.skills = acting.skills || { mining: { level: 1, xp: 0 }, woodcutting: { level: 1, xp: 0 }, building: { level: 1, xp: 0 } }
     const b = acting.skills.building || { level: 1, xp: 0 }
     b.xp += placed.type === 'workbench' ? 20 : 8
-    while (b.xp >= b.level * 100) { b.xp -= b.level * 100; b.level += 1 }
+    while (b.xp >= rsCumulativeXp(b.level + 1)) { b.level += 1 }
     acting.skills.building = b
     io.emit('harvested', { x: cx, y: cy, type: 'build', playerId: acting.id, inventory: acting.inventory, skills: acting.skills })
     acting._lastActionAt = now
@@ -521,7 +548,8 @@ io.on('connection', (socket) => {
     const actor = Object.values(gameState.players).find(p => p.socketId === socket.id)
     if (!actor || !actor.isActive || (typeof actor.hp === 'number' && actor.hp <= 0)) return
     const now = Date.now();
-    if (typeof actor._lastActionAt === 'number' && now - actor._lastActionAt < 950) return
+    const enforceCooldown = !!(gameState.settings && gameState.settings.cooldownsEnabled);
+    if (enforceCooldown && typeof actor._lastActionAt === 'number' && now - actor._lastActionAt < 950) return
     const { x, y, tool } = data || {}
     if (!Number.isInteger(x) || !Number.isInteger(y)) return
     if (x < 0 || x > 23 || y < 0 || y > 23) return
@@ -555,9 +583,8 @@ io.on('connection', (socket) => {
     const grantXp = (skillKey, amount) => {
       const skill = actor.skills[skillKey] || { level: 1, xp: 0 }
       skill.xp += amount
-      // Simple level-up curve: level*100 xp per level
-      while (skill.xp >= skill.level * 100) {
-        skill.xp -= skill.level * 100
+      // RuneScape-like curve using rsCumulativeXp table
+      while (skill.xp >= rsCumulativeXp(skill.level + 1)) {
         skill.level += 1
       }
       actor.skills[skillKey] = skill
@@ -817,6 +844,18 @@ io.on('connection', (socket) => {
     gameState.mapSeed = seed >>> 0
     io.emit('map_seed', { seed: gameState.mapSeed })
     console.log(`Map seed updated to ${gameState.mapSeed}`)
+    saveGameState()
+  })
+
+  // Toggle runtime settings (e.g., cooldowns)
+  socket.on('set_settings', (data) => {
+    const acting = Object.values(gameState.players).find(p => p.socketId === socket.id)
+    if (!acting || !acting.isActive || (typeof acting.hp === 'number' && acting.hp <= 0)) return
+    const next = {
+      cooldownsEnabled: !!(data && typeof data.cooldownsEnabled === 'boolean' ? data.cooldownsEnabled : (gameState.settings?.cooldownsEnabled || false))
+    }
+    gameState.settings = { ...gameState.settings, ...next }
+    io.emit('settings_update', gameState.settings)
     saveGameState()
   })
   
